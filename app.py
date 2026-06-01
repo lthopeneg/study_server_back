@@ -59,6 +59,16 @@ class EmailVerification(db.Model):
     expires_at = db.Column(db.DateTime, nullable=False)
     is_verified = db.Column(db.Boolean, default=False)
 
+# 3. 보안뉴스 수집용 테이블 (서버 재시작 시 자동 생성됨)
+class SecurityNews(db.Model):
+    __tablename__ = 'security_news'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    title = db.Column(db.String(500), nullable=False)
+    link = db.Column(db.String(500), unique=True, nullable=False) # 고유값(중복수집 방어)
+    pub_date = db.Column(db.String(100), nullable=True)
+    source = db.Column(db.String(100), nullable=True) # 뉴스 출처 (보안뉴스, 데일리시큐 등)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
 # 서버 켜질 때 필요한 테이블 자동 생성 (존재하면 무시)
 with app.app_context():
     db.create_all()
@@ -165,6 +175,28 @@ def login():
         }), 200
         
     return jsonify({"status": "error", "message": "아이디 또는 비밀번호가 잘못되었습니다."}), 401
+
+# [API] 5. 보안뉴스 리스트 반환 (프론트엔드용)
+@app.route('/api/news', methods=['GET'])
+def get_news():
+    try:
+        # DB에서 최신순(id 역순)으로 20개를 꺼내옵니다
+        news_list = SecurityNews.query.order_by(SecurityNews.id.desc()).limit(20).all()
+        
+        result = []
+        for news in news_list:
+            result.append({
+                "id": news.id,
+                "title": news.title,
+                "link": news.link,
+                "pub_date": news.pub_date,
+                "source": news.source
+            })
+            
+        return jsonify({"status": "success", "data": result}), 200
+    except Exception as e:
+        print("News API Error:", e)
+        return jsonify({"status": "error", "message": "뉴스를 불러오는데 실패했습니다."}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
