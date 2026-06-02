@@ -40,8 +40,9 @@ def crawl_and_save():
                     title = entry.title
                     link = entry.link
                     # RSS 특성상 pubDate 키값이 다를 수 있으므로 예외처리
-                    pub_date = getattr(entry, 'published', getattr(entry, 'pubDate', ''))
-                    
+                    # 보안뉴스의 특이한 태그(updated)까지 모조리 잡아내기
+                    pub_date = getattr(entry, 'published', getattr(entry, 'pubDate', getattr(entry, 'updated', '')))
+
                     # 1. 중복 확인 로직 (이미 DB에 저장된 뉴스 링크면 통과)
                     sql_check = "SELECT id FROM security_news WHERE link = %s"
                     cursor.execute(sql_check, (link,))

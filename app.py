@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import email.utils # RSS 날짜 문자열 분석용 패키지 추가
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -10,6 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_mail import Mail, Message
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
 
 # .env 파일 로드
 load_dotenv()
@@ -176,24 +178,67 @@ def login():
         
     return jsonify({"status": "error", "message": "아이디 또는 비밀번호가 잘못되었습니다."}), 401
 
-# [API] 5. 보안뉴스 리스트 반환 (프론트엔드용)
+# [API] 5. 보안뉴스 리스트 반환 (날짜 정렬 및 페이지네이션 적용)
 @app.route('/api/news', methods=['GET'])
 def get_news():
     try:
-        # DB에서 최신순(id 역순)으로 20개를 꺼내옵니다
-        news_list = SecurityNews.query.order_by(SecurityNews.id.desc()).limit(20).all()
+        # 프론트엔드에서 요청한 페이지 번호 (기본값 1페이지, 한 페이지당 10개)
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        
+        # 1. DB에서 일단 전체 뉴스를 가져옵니다
+        all_news = SecurityNews.query.all()
+        
+        # 2. 어떤 형태의 날짜 문자열이 들어와도 에러 없이 완벽하게 변환하는 함수
+        def parse_to_datetime(news):
+            if not news.pub_date:
+                return news.created_at or datetime.min
+            try:
+                # 1차 시도: 보안뉴스 표준 RSS 포맷 (Tue, 2 Jun 2026...)
+                dt = email.utils.parsedate_to_datetime(news.pub_date)
+                # 시간대(timezone)를 제거해서 둘을 똑같은 기준으로 맞춰줌 (비교 에러 방지용)
+                return dt.replace(tzinfo=None)
+            except:
+                try:
+                    # 2차 시도: 데일리시큐 포맷 (YYYY-MM-DD HH:MM:SS)
+                    dt = datetime.fromisoformat(news.pub_date.replace(" ", "T"))
+                    return dt.replace(tzinfo=None)
+                except:
+                    return news.created_at or datetime.min
+
+        # 3. 파이썬 메모리 상에서 최신 날짜순으로 완벽하게 재정렬
+        all_news.sort(key=parse_to_datetime, reverse=True)
+        
+        # 4. 페이지네이션 (슬라이싱) 적용
+        total_count = len(all_news)
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated_news = all_news[start_idx:end_idx]
         
         result = []
-        for news in news_list:
+        for news in paginated_news:
+            # 프론트엔드 화면이 깔끔하도록 서로 다른 날짜 모양을 "2026-06-02 16:26" 처럼 예쁘게 통일!
+            dt = parse_to_datetime(news)
+            if dt == datetime.min:
+                display_date = ""
+            else:
+                display_date = dt.strftime("%Y-%m-%d %H:%M")
+                
             result.append({
                 "id": news.id,
                 "title": news.title,
                 "link": news.link,
-                "pub_date": news.pub_date,
+                "pub_date": display_date,
                 "source": news.source
             })
             
-        return jsonify({"status": "success", "data": result}), 200
+        return jsonify({
+            "status": "success", 
+            "data": result,
+            "total": total_count,
+            "page": page,
+            "total_pages": (total_count + limit - 1) // limit
+        }), 200
     except Exception as e:
         print("News API Error:", e)
         return jsonify({"status": "error", "message": "뉴스를 불러오는데 실패했습니다."}), 500
