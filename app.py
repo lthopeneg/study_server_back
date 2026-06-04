@@ -1,7 +1,7 @@
 import os
 import random
 import re
-import email.utils # RSS 날짜 문자열 분석용 패키지 추가
+import email.utils
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -11,13 +11,34 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_mail import Mail, Message
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_jwt_extended import (
+    JWTManager, create_access_token, set_access_cookies, 
+    jwt_required, get_jwt_identity, unset_jwt_cookies
+)
 
 
 # .env 파일 로드
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+
+# React(프론트엔드)와 안전하게 쿠키를 주고받기 위해 CORS 설정 강화
+# supports_credentials=True 옵션이 있어야만 HttpOnly 쿠키가 브라우저에 저장되고 전송됩니다!
+CORS(app, supports_credentials=True)
+
+# ==========================================
+# [보안 설정] JWT 쿠키 기반 로그인 유지 설정
+# ==========================================
+# JWT 암호화에 사용할 비밀키 (실제 환경에서는 길고 복잡한 난수 사용 필수)
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "super-secure-jwt-secret-key-1234")
+# 토큰을 헤더가 아닌 '쿠키(Cookie)'에만 저장하도록 강제
+app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+# 자바스크립트(XSS)가 쿠키를 훔쳐갈 수 없도록 HttpOnly 속성 강제 활성화 (시큐어코딩 핵심)
+app.config["JWT_COOKIE_SECURE"] = False # 현재 HTTP 로컬 개발 환경이므로 False. 배포 시 HTTPS 적용 후 True로 변경 권장
+# 실습 편의성을 위해 CSRF 보호는 잠시 해제 (원래는 True로 설정 후 X-CSRF-Token 헤더 처리가 필요함)
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False 
+
+jwt = JWTManager(app)
 
 # DB 연결 설정
 DB_USER = os.getenv("DB_USER")
@@ -25,7 +46,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME")
-app.config['SQLALCHEMY_DATABASE_URI'] = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -159,7 +180,7 @@ def signup():
     
     return jsonify({"status": "success", "message": "회원가입이 완료되었습니다!"}), 201
 
-# [API] 4. 기존 로그인 로직 (보안 업그레이드)
+# [API] 4. 기존 로그인 로직 (보안 업그레이드 및 JWT 30분 쿠키 발급)
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
@@ -168,15 +189,66 @@ def login():
     
     user = User.query.filter_by(login_id=req_user_id).first()
     
-    # 평문 비교가 아닌 check_password_hash로 해시(Hash)된 문자열을 해독하여 비교
     if user and check_password_hash(user.password, req_password):
-        return jsonify({
+        # 1. 로그인 성공! 30분짜리 짧은 유효기간의 JWT 생성 (보안 강화)
+        access_token = create_access_token(identity=user.login_id, expires_delta=timedelta(minutes=30))
+        
+        # 2. 프론트엔드 타이머를 위해 만료 시각(Timestamp) 계산
+        expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
+        
+        resp = jsonify({
             "status": "success", 
             "username": user.login_id, 
+            "expires_at": expires_at, # 프론트엔드 타이머용 시각 전달
             "message": f"{user.login_id}님 환영합니다!"
-        }), 200
+        })
+        
+        set_access_cookies(resp, access_token)
+        return resp, 200
         
     return jsonify({"status": "error", "message": "아이디 또는 비밀번호가 잘못되었습니다."}), 401
+
+# [API] 자동 로그인 (새로고침 시 토큰 검증 및 30분 갱신)
+@app.route('/api/check-auth', methods=['GET'])
+@jwt_required()
+def check_auth():
+    current_user = get_jwt_identity()
+    
+    # 새로고침 시에도 자동으로 남은 시간을 30분으로 꽉 채워 새로 발급해줍니다 (UX 강화).
+    new_access_token = create_access_token(identity=current_user, expires_delta=timedelta(minutes=30))
+    expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
+    
+    resp = jsonify({
+        "status": "success", 
+        "username": current_user,
+        "expires_at": expires_at
+    })
+    set_access_cookies(resp, new_access_token)
+    return resp, 200
+
+# [API] 세션 연장 (Refresh) - 타이머 30분 리셋용
+@app.route('/api/refresh', methods=['POST'])
+@jwt_required()
+def refresh():
+    current_user = get_jwt_identity()
+    # 기존 쿠키를 확인한 뒤, 새로운 30분짜리 토큰을 생성해 갈아끼워줍니다.
+    new_access_token = create_access_token(identity=current_user, expires_delta=timedelta(minutes=30))
+    expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
+    
+    resp = jsonify({
+        "status": "success", 
+        "message": "세션이 30분 연장되었습니다.",
+        "expires_at": expires_at
+    })
+    set_access_cookies(resp, new_access_token)
+    return resp, 200
+
+# [API] 로그아웃 (토큰 쿠키 파기)
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    resp = jsonify({"status": "success", "message": "안전하게 로그아웃 되었습니다."})
+    unset_jwt_cookies(resp)
+    return resp, 200
 
 # [API] 5. 보안뉴스 리스트 반환 (날짜 정렬 및 페이지네이션 적용)
 @app.route('/api/news', methods=['GET'])
