@@ -92,6 +92,16 @@ class SecurityNews(db.Model):
     source = db.Column(db.String(100), nullable=True) # 뉴스 출처 (보안뉴스, 데일리시큐 등)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
+# 4. AI 오늘의 메인 뉴스 전용 테이블
+class DailyMainNews(db.Model):
+    __tablename__ = 'daily_main_news'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    title = db.Column(db.String(255), nullable=False) # AI가 요약한 핵심 제목
+    content_md = db.Column(db.Text, nullable=False)   # AI가 작성한 마크다운 본문
+    original_url = db.Column(db.String(500), nullable=False) # 원본 기사 출처 링크
+    selection_reason = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
 # 서버 켜질 때 필요한 테이블 자동 생성 (존재하면 무시)
 with app.app_context():
     db.create_all()
@@ -314,6 +324,31 @@ def get_news():
     except Exception as e:
         print("News API Error:", e)
         return jsonify({"status": "error", "message": "뉴스를 불러오는데 실패했습니다."}), 500
+
+# [API] 6. 오늘 생성된 가장 최신 AI 메인 뉴스 가져오기
+@app.route('/api/news/daily-main', methods=['GET'])
+def get_daily_main_news():
+    try:
+        # 가장 최근에 작성된(ID가 가장 높은) 뉴스 1건만 쏙 빼옵니다.
+        latest_news = DailyMainNews.query.order_by(DailyMainNews.id.desc()).first()
+        
+        # 아직 크롤링/생성된 뉴스가 없다면 None 반환
+        if not latest_news:
+            return jsonify({"status": "success", "data": None}), 200
+            
+        return jsonify({
+            "status": "success",
+            "data": {
+                "id": latest_news.id,
+                "title": latest_news.title,
+                "content_md": latest_news.content_md,
+                "original_url": latest_news.original_url,
+                "selection_reason": latest_news.selection_reason,
+                "created_at": latest_news.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
