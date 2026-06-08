@@ -65,7 +65,7 @@ def generate_ai_news():
         print(f"-> 1단계: 오늘 수집된 {len(news_list)}개의 기사 중 메인 기사 선정 중...")
         
         # 밖(부모 폴더)에 있는 프롬프트 파일 읽기
-        with open('../News_prompt/check_prompt.txt', 'r', encoding='utf-8') as f:
+        with open('News_prompt/check_prompt.txt', 'r', encoding='utf-8') as f:
             check_prompt = f.read()
             
         # 후보 리스트 텍스트화 (제목과 URL만 깔끔하게 전달해서 API 비용 절감!)
@@ -102,7 +102,7 @@ def generate_ai_news():
             return
             
         print("-> 3단계: AI 심층 요약 및 마크다운 기사 작성 중...")
-        with open('../News_prompt/make_news_prompt.txt', 'r', encoding='utf-8') as f:
+        with open('News_prompt/make_news_prompt.txt', 'r', encoding='utf-8') as f:
             make_prompt = f.read()
         safe_url = selected_url.replace('http://', 'https://')    
         final_prompt_2 = f"{make_prompt}\n\n[원문 제목]: {selected_title}\n[원문 URL]: {selected_url}\n[본문 내용]:\n{article_body}"
