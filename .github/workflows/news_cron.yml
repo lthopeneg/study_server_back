@@ -4,7 +4,7 @@ name: Daily Security News Crawler
 on:
   # 1. 매일 KST 아침 9시 (UTC 기준 00:00) 마다 자동으로 알아서 실행
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '43 23 * * *'
   # 2. 깃허브 웹사이트에서 수동으로 버튼을 눌러서 강제로 실행해 볼 수 있도록 허용
   workflow_dispatch:
 
