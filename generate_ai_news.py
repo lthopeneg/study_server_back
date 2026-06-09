@@ -3,10 +3,11 @@ import json
 from datetime import datetime, date
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+# 🚨 최신 라이브러리로 변경 (pip install google-genai 필요)
+from google import genai
+from google.genai import types
 from openai import OpenAI
 import time
-# 기존 app.py에서 필요한 모듈 가져오기
 from app import app, db, SecurityNews, DailyMainNews
 
 # ==========================================
@@ -18,11 +19,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("환경 변수에 GEMINI_API_KEY가 없습니다!")
 
-# Gemini 설정
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+# 최신 Gemini 클라이언트 초기화 방식
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# OpenAI 설정
 openai_client = None
 if OPENAI_API_KEY:
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -31,17 +30,23 @@ if OPENAI_API_KEY:
 # 2. 공통 AI 호출 래퍼 (Fallback 로직)
 # ==========================================
 def call_llm_with_fallback(prompt, is_json=False):
-    """Gemini API를 먼저 시도하고, 에러(429 등) 발생 시 OpenAI API로 자동 전환합니다."""
-    # [1차 시도] Gemini
+    """Gemini API를 먼저 시도하고, 에러 발생 시 OpenAI API로 자동 전환합니다."""
+    # [1차 시도] Gemini (최신 SDK v1 기준 코드)
     try:
         print("   [안내] Gemini API 호출 시도 중...")
         if is_json:
-            response = gemini_model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(response_mime_type="application/json")
+            response = gemini_client.models.generate_content(
+                model='gemini-2.5-flash', # 2026년 기준 안정적인 최신 플래시 모델 권장 (혹은 gemini-1.5-flash)
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
         else:
-            response = gemini_model.generate_content(prompt)
+            response = gemini_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt
+            )
         return response.text
     except Exception as gemini_err:
         print(f"   ⚠️ Gemini 호출 실패: {gemini_err}")
@@ -83,7 +88,6 @@ def scrape_article_body(url):
 
 def generate_ai_news():
     with app.app_context():
-        # [방어 로직] 오늘 이미 AI 메인 뉴스가 만들어져 있다면 스킵
         today = date.today()
         existing = DailyMainNews.query.filter(db.func.date(DailyMainNews.created_at) == today).first()
         if existing:
@@ -107,16 +111,15 @@ def generate_ai_news():
             
         candidates_text_prelim = "오늘의 기사 전체 목록 (제목만 제공):\n"
         for i, news in enumerate(news_list):
-            candidates_text_prelim += f"[{i+1}] 제목: {news['title']}\n     URL: {news['link']}\n"
+            candidates_text_prelim += f"[{i+1}] 제목: {news['title']}\n    URL: {news['link']}\n"
             
         final_prompt_prelim = f"{check_prompt_prelim}\n\n{candidates_text_prelim}"
         
-        # 🌟 래퍼 함수 사용
         response_prelim_text = call_llm_with_fallback(final_prompt_prelim, is_json=True)
         
         try:
-            top3_urls = json.loads(response_prelim_text)
-            print("   [예선 통과] 3개의 후보 URL 확보 완료")
+            top3_data = json.loads(response_prelim_text)
+            print("   [예선 통과] 데이터 확보 완료. URL 추출 중...")
         except Exception as e:
             print("   JSON 파싱 에러 (예선전):", e)
             print("   응답 내용:", response_prelim_text)
@@ -135,19 +138,26 @@ def generate_ai_news():
             
         candidates_text_final = "TOP 3 후보 기사 상세 내용:\n"
         
-        for i, item in enumerate(top3_urls):
-            url = item.get("selected_url")
+        # 🚨 [방어 로직] top3_data가 딕셔너리 리스트가 아니라 단순 문자열 리스트일 때도 처리 가능하게 변경
+        for i, item in enumerate(top3_data):
+            if isinstance(item, dict):
+                url = item.get("selected_url") or item.get("url")
+            else:
+                url = item  # 문자열인 경우 그대로 url로 인식
+                
+            if not url:
+                continue
+
             title = next((n['title'] for n in news_list if n['link'] == url), "제목 없음")
             
             full_body = scrape_article_body(url)
             short_body = full_body[:1000] + "..." if len(full_body) > 1000 else full_body
             
-            candidates_text_final += f"[{i+1}] 제목: {title}\n     URL: {url}\n     본문 내용: {short_body}\n\n"
+            candidates_text_final += f"[{i+1}] 제목: {title}\n    URL: {url}\n    본문 내용: {short_body}\n\n"
             time.sleep(0.5)
             
         final_prompt_final = f"{check_prompt_final}\n\n{candidates_text_final}"
         
-        # 🌟 래퍼 함수 사용
         response_final_text = call_llm_with_fallback(final_prompt_final, is_json=True)
         
         try:
@@ -176,7 +186,6 @@ def generate_ai_news():
         
         final_prompt_3 = f"{make_prompt}\n\n[원문 제목]: {selected_title}\n[원문 URL]: {safe_url}\n[본문 내용]:\n{article_body}"
         
-        # 🌟 래퍼 함수 사용 (요약본은 일반 텍스트이므로 is_json=False)
         final_markdown = call_llm_with_fallback(final_prompt_3, is_json=False)
         
         # ==========================================================
