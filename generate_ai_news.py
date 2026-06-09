@@ -4,6 +4,7 @@ from datetime import datetime, date
 import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+import time
 # 기존 app.py에서 필요한 모듈 가져오기
 from app import app, db, SecurityNews, DailyMainNews
 
@@ -68,11 +69,23 @@ def generate_ai_news():
         with open('News_prompt/check_prompt.txt', 'r', encoding='utf-8') as f:
             check_prompt = f.read()
             
-        # 후보 리스트 텍스트화 (제목과 URL만 깔끔하게 전달해서 API 비용 절감!)
+        # 후보 리스트 텍스트화 (모든 기사 본문을 긁어와서 AI에게 판단 근거로 제공!)
+        print("   [안내] AI가 낚시성 기사를 거르기 위해 모든 후보 기사의 본문을 읽어오고 있습니다...")
         candidates_text = "오늘의 기사 후보 목록:\n"
+        
         for i, news in enumerate(news_list):
-            candidates_text += f"[{i+1}] 제목: {news['title']}\n     URL: {news['link']}\n"
+            # 1. 기사 링크로 들어가서 본문 스크래핑
+            full_body = scrape_article_body(news['link'])
             
+            # 2. 너무 길면 토큰 비용과 속도에 부담이 되므로, 핵심이 담긴 앞부분 1000자만 잘라서 제공
+            short_body = full_body[:1000] + "..." if len(full_body) > 1000 else full_body
+            
+            # 3. 프롬프트에 추가
+            candidates_text += f"[{i+1}] 제목: {news['title']}\n     URL: {news['link']}\n     본문 내용: {short_body}\n\n"
+            
+            # 4. 언론사 서버에 무리를 주거나 봇으로 차단당하지 않도록 0.5초씩 쉬어줍니다
+            time.sleep(0.5)
+
         final_prompt_1 = f"{check_prompt}\n\n{candidates_text}"
         
         # 💥 [핵심 기술] Gemini가 딴소리 못하고 무조건 JSON 포맷으로만 대답하게 강제하는 설정
