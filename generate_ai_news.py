@@ -118,7 +118,20 @@ def generate_ai_news():
         response_prelim_text = call_llm_with_fallback(final_prompt_prelim, is_json=True)
         
         try:
-            top3_data = json.loads(response_prelim_text)
+            parsed_data = json.loads(response_prelim_text)
+            
+            # [방어 로직] 구글이 배열 [ ] 로 줬을 때와 OpenAI가 오브젝트 { } 로 줬을 때 모두 호환
+            if isinstance(parsed_data, list):
+                top3_list = parsed_data
+            else:
+                # "top3_urls" 키를 찾고, 혹시 다른 이름으로 줬다면 첫 번째 리스트 값을 찾음
+                top3_list = parsed_data.get("top3_urls", [])
+                if not top3_list:
+                    for k, v in parsed_data.items():
+                        if isinstance(v, list):
+                            top3_list = v
+                            break
+                            
             print("   [예선 통과] 데이터 확보 완료. URL 추출 중...")
         except Exception as e:
             print("   JSON 파싱 에러 (예선전):", e)
@@ -139,7 +152,7 @@ def generate_ai_news():
         candidates_text_final = "TOP 3 후보 기사 상세 내용:\n"
         
         # 🚨 [방어 로직] top3_data가 딕셔너리 리스트가 아니라 단순 문자열 리스트일 때도 처리 가능하게 변경
-        for i, item in enumerate(top3_data):
+        for i, item in enumerate(top3_list):
             if isinstance(item, dict):
                 url = item.get("selected_url") or item.get("url")
             else:
