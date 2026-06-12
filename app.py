@@ -327,30 +327,55 @@ def get_news():
         print("News API Error:", e)
         return jsonify({"status": "error", "message": "뉴스를 불러오는데 실패했습니다."}), 500
 
-# [API] 6. 오늘 생성된 가장 최신 AI 메인 뉴스 가져오기
+# [API] 6. AI 메인 뉴스 리스트 (아카이브) 가져오기
+@app.route('/api/news/ai-history', methods=['GET'])
+def get_ai_news_history():
+    try:
+        # 생성일 역순으로 정렬하여 목록을 가져옵니다. 본문은 제외하고 가볍게 가져옵니다.
+        news_list = DailyMainNews.query.order_by(DailyMainNews.created_at.desc()).all()
+        result = [{
+            "id": n.id,
+            "title": n.title,
+            "original_url": n.original_url,
+            "created_at": n.created_at.strftime("%Y-%m-%d") # 날짜만 잘라서 반환
+        } for n in news_list]
+        
+        return jsonify({"status": "success", "data": result}), 200
+    except Exception as e:
+        print("AI History API Error:", e)
+        return jsonify({"status": "error", "message": "AI 뉴스 기록을 불러오는데 실패했습니다."}), 500
+
+# [API] 7. 특정 AI 메인 뉴스 상세 가져오기 (파라미터 없으면 최신 반환)
 @app.route('/api/news/daily-main', methods=['GET'])
 def get_daily_main_news():
     try:
-        # 가장 최근에 작성된(ID가 가장 높은) 뉴스 1건만 쏙 빼옵니다.
-        latest_news = DailyMainNews.query.order_by(DailyMainNews.id.desc()).first()
+        news_id = request.args.get('id', type=int)
         
-        # 아직 크롤링/생성된 뉴스가 없다면 None 반환
-        if not latest_news:
+        if news_id:
+            # 쿼리스트링(?id=)으로 요청이 들어오면 해당 뉴스만 조회
+            news = DailyMainNews.query.get(news_id)
+        else:
+            # 그냥 요청하면 기존처럼 가장 최신 뉴스를 조회
+            news = DailyMainNews.query.order_by(DailyMainNews.id.desc()).first()
+            
+        if not news:
             return jsonify({"status": "success", "data": None}), 200
             
         return jsonify({
             "status": "success",
             "data": {
-                "id": latest_news.id,
-                "title": latest_news.title,
-                "content_md": latest_news.content_md,
-                "original_url": latest_news.original_url,
-                "selection_reason": latest_news.selection_reason,
-                "created_at": latest_news.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                "id": news.id,
+                "title": news.title,
+                "content_md": news.content_md,
+                "original_url": news.original_url,
+                "selection_reason": news.selection_reason,
+                "created_at": news.created_at.strftime("%Y-%m-%d %H:%M:%S")
             }
         }), 200
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print("Daily Main News API Error:", e)
+        return jsonify({"status": "error", "message": "AI 메인 뉴스를 불러오는데 실패했습니다."}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
