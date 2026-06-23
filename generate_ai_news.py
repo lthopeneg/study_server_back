@@ -8,7 +8,9 @@ from google import genai
 from google.genai import types
 from openai import OpenAI
 import time
-from app import app, db, SecurityNews, DailyMainNews
+from app import app
+from extensions import db
+from models import SecurityNews, DailyMainNews
 
 # ==========================================
 # 1. API 키 및 클라이언트 설정
