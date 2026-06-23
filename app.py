@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from extensions import db, jwt, mail, limiter
 from routes.auth import auth_bp
 from routes.news import news_bp
+from routes.user import user_bp
 
 # 테이블 생성을 위해 모델 임포트 (app_context보다 위에서 호출 필수)
 import models 
@@ -48,6 +49,7 @@ with app.app_context():
 # --- 3. 라우터 (Blueprint) 등록 ---
 app.register_blueprint(auth_bp)
 app.register_blueprint(news_bp)
+app.register_blueprint(user_bp)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
