@@ -153,7 +153,8 @@ def generate_ai_news():
             
         candidates_text_final = "TOP 3 후보 기사 상세 내용:\n"
         
-        # 🚨 [방어 로직] top3_data가 딕셔너리 리스트가 아니라 단순 문자열 리스트일 때도 처리 가능하게 변경
+        # [환각 방어 및 재시도 로직] 본문을 가져올 수 있는 정상적인 기사만 결승에 진출시킵니다.
+        valid_candidates = []
         for i, item in enumerate(top3_list):
             if isinstance(item, dict):
                 url = item.get("selected_url") or item.get("url")
@@ -162,17 +163,33 @@ def generate_ai_news():
                 
             if not url:
                 continue
-
             title = next((n['title'] for n in news_list if n['link'] == url), "제목 없음")
             
             full_body = scrape_article_body(url)
-            short_body = full_body[:1000] + "..." if len(full_body) > 1000 else full_body
             
-            candidates_text_final += f"[{i+1}] 제목: {title}\n    URL: {url}\n    본문 내용: {short_body}\n\n"
+            # 본문이 50자 이하이거나 에러가 났다면 후보에서 즉시 제외 (다음 후보로 넘어감)
+            if not full_body or len(full_body.strip()) < 50:
+                print(f"   [경고] {title} 스크래핑 실패. 결승 후보에서 제외합니다.")
+                continue
+                
+            valid_candidates.append({
+                "title": title,
+                "url": url,
+                "full_body": full_body
+            })
             time.sleep(0.5)
             
+        # 살아남은 후보가 하나도 없다면 취소
+        if not valid_candidates:
+            print("   ❌ TOP 3 후보 모두 본문을 가져올 수 없습니다. 오늘 뉴스 생성을 취소합니다.")
+            return
+            
+        # 살아남은 정상 기사들만 AI에게 제공
+        for i, cand in enumerate(valid_candidates):
+            short_body = cand['full_body'][:1000] + "..." if len(cand['full_body']) > 1000 else cand['full_body']
+            candidates_text_final += f"[{i+1}] 제목: {cand['title']}\n    URL: {cand['url']}\n    본문 내용: {short_body}\n\n"
+            
         final_prompt_final = f"{check_prompt_final}\n\n{candidates_text_final}"
-        
         response_final_text = call_llm_with_fallback(final_prompt_final, is_json=True)
         
         try:
@@ -184,10 +201,8 @@ def generate_ai_news():
         except Exception as e:
             print("   JSON 파싱 에러 (결승전):", e)
             return
-
         print("   (API 호출 속도 조절을 위해 5초 대기합니다...)")
         time.sleep(5)
-
         # ==========================================================
         # Step 3: 최종 기사 요약 및 마크다운 작성
         # ==========================================================
@@ -196,7 +211,22 @@ def generate_ai_news():
         with open('News_prompt/make_news_prompt.txt', 'r', encoding='utf-8') as f:
             make_prompt = f.read()
             
-        article_body = scrape_article_body(selected_url)
+        # 이미 2단계에서 검증해둔 본문(full_body)을 찾아서 재활용합니다 (스크래핑 2번 할 필요 방지)
+        article_body = ""
+        for cand in valid_candidates:
+            if cand['url'] == selected_url:
+                article_body = cand['full_body']
+                break
+                
+        # 만약 URL 매칭이 안됐다면 한 번 더 긁어옵니다
+        if not article_body:
+            article_body = scrape_article_body(selected_url)
+            
+        # 최종 방어벽
+        if not article_body or len(article_body.strip()) < 50:
+            print("   ❌ 최종 기사 본문 확보 실패. 작성을 취소합니다.")
+            return
+            
         safe_url = selected_url.replace('http://', 'https://')
         
         final_prompt_3 = f"{make_prompt}\n\n[원문 제목]: {selected_title}\n[원문 URL]: {safe_url}\n[본문 내용]:\n{article_body}"
