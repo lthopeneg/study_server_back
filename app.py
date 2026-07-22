@@ -53,5 +53,9 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(news_bp)
 app.register_blueprint(user_bp)
 
+# 방금 만든 연구 노트 API 라우터 등록
+from routes.notes import notes_bp
+app.register_blueprint(notes_bp)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
