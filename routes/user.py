@@ -2,7 +2,7 @@ import re
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from extensions import db
+from extensions import db, limiter
 from models import User
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
@@ -34,6 +34,7 @@ def get_profile():
 # [API] 비밀번호 변경
 @user_bp.route('/password', methods=['PUT'])
 @jwt_required()
+@limiter.limit("5 per hour")
 def change_password():
     current_user_id = get_jwt_identity()
     user = User.query.filter_by(login_id=current_user_id).first()
@@ -69,6 +70,7 @@ def change_password():
 # [API] 현재 비밀번호 일치 여부 단순 검증 (회원정보수정 진입용 2차 인증)
 @user_bp.route('/verify-password', methods=['POST'])
 @jwt_required()
+@limiter.limit("5 per minute")
 def verify_password():
     current_user_id = get_jwt_identity()
     user = User.query.filter_by(login_id=current_user_id).first()

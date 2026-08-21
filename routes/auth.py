@@ -83,6 +83,7 @@ def signup():
     return jsonify({"status": "success", "message": "회원가입이 완료되었습니다!"}), 201
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit("5 per minute;20 per hour")
 def login():
     data = request.json
     req_user_id = data.get('userId')
