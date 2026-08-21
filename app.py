@@ -17,7 +17,9 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # --- 1. 설정 (Config) ---
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "super-secure-jwt-secret-key-1234")
+# JWT 서명 키는 로컬 .env 또는 운영 배포 환경에서 반드시 주입해야 합니다.
+# 누락된 상태로 공개 기본키를 사용하는 대신 서버 시작을 즉시 중단합니다.
+app.config["JWT_SECRET_KEY"] = os.environ["JWT_SECRET_KEY"]
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_COOKIE_SECURE"] = False 
 app.config["JWT_COOKIE_CSRF_PROTECT"] = False 
