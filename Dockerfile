@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 소스 코드 전체 복사
 COPY . .
 
-# Flask 서버 포트 노출
+# Gunicorn 서버 포트 노출
 EXPOSE 5000
 
-# 서버 실행 (host 0.0.0.0 설정이 되어있어야 외부에서 접근 가능)
-CMD ["python", "app.py"]
+# Oracle Cloud 무료 티어의 메모리를 고려해 단일 프로세스와 2개 스레드로 실행
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "2", "--timeout", "60", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
