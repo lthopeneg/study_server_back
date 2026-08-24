@@ -1,68 +1,133 @@
 import os
-import feedparser
-import pymysql
-from dotenv import load_dotenv
+import sys
 from datetime import datetime
 
-# 로컬 테스트용 .env 로드 (GitHub Actions 운영 환경에서는 시크릿 변수를 쓰므로 무시됨)
+import feedparser
+import pymysql
+import requests
+from dotenv import load_dotenv
+
 load_dotenv()
 
-# 한국 주요 보안 뉴스 RSS 피드 목록 (보안뉴스, 데일리시큐)
 RSS_URLS = [
     ("보안뉴스", "https://www.boannews.com/media/news_rss.xml"),
-    ("데일리시큐", "https://www.dailysecu.com/rss/allArticle.xml")
+    ("데일리시큐", "https://www.dailysecu.com/rss/allArticle.xml"),
 ]
 
+REQUEST_TIMEOUT_SECONDS = 20
+REQUIRED_DB_ENV = ("DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME")
+
+
+def validate_environment():
+    missing = [name for name in REQUIRED_DB_ENV if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(f"필수 DB 환경 변수가 없습니다: {', '.join(missing)}")
+
+
 def get_db_connection():
-    # .env(로컬) 또는 깃허브 시크릿(운영)에서 가져온 오라클 DB 정보로 직접 연결
+    validate_environment()
     return pymysql.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
+        host=os.environ["DB_HOST"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        database=os.environ["DB_NAME"],
         port=int(os.getenv("DB_PORT") or 3306),
-        cursorclass=pymysql.cursors.DictCursor
+        connect_timeout=10,
+        read_timeout=30,
+        write_timeout=30,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
     )
+
+
+def fetch_feed(url):
+    response = requests.get(
+        url,
+        headers={"User-Agent": "SECURECODE-SPACE-NewsCrawler/1.0"},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    feed = feedparser.parse(response.content)
+    if getattr(feed, "bozo", False) and not feed.entries:
+        raise RuntimeError(f"RSS 파싱 실패: {feed.bozo_exception}")
+    if not feed.entries:
+        raise RuntimeError("RSS에 기사 항목이 없습니다.")
+    return feed
+
+
+def normalize_entry(entry):
+    title = str(getattr(entry, "title", "")).strip()
+    link = str(getattr(entry, "link", "")).strip()
+    pub_date = str(
+        getattr(entry, "published", getattr(entry, "pubDate", getattr(entry, "updated", "")))
+    ).strip()
+
+    if not title or not link.startswith(("http://", "https://")):
+        return None
+    if len(link) > 500:
+        return None
+    return title[:500], link, pub_date[:100]
+
+
+def save_feed(connection, source, feed):
+    inserted_count = 0
+    skipped_count = 0
+    sql_insert = """
+        INSERT INTO security_news (title, link, pub_date, source)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE link = VALUES(link)
+    """
+
+    with connection.cursor() as cursor:
+        for entry in feed.entries:
+            normalized = normalize_entry(entry)
+            if not normalized:
+                skipped_count += 1
+                continue
+            title, link, pub_date = normalized
+            cursor.execute(sql_insert, (title, link, pub_date, source[:100]))
+            inserted_count += cursor.rowcount
+
+    connection.commit()
+    return inserted_count, skipped_count
+
 
 def crawl_and_save():
     print(f"[{datetime.now()}] 보안뉴스 크롤링 시작...")
-    
     connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            new_count = 0
-            for source, url in RSS_URLS:
-                print(f"-> {source} 피드 가져오는 중...")
-                feed = feedparser.parse(url)
-                
-                # 최신 기사들을 하나씩 확인
-                for entry in feed.entries:
-                    title = entry.title
-                    link = entry.link
-                    # RSS 특성상 pubDate 키값이 다를 수 있으므로 예외처리
-                    # 보안뉴스의 특이한 태그(updated)까지 모조리 잡아내기
-                    pub_date = getattr(entry, 'published', getattr(entry, 'pubDate', getattr(entry, 'updated', '')))
+    total_inserted = 0
+    successful_sources = 0
+    failed_sources = []
 
-                    # 1. 중복 확인 로직 (이미 DB에 저장된 뉴스 링크면 통과)
-                    sql_check = "SELECT id FROM security_news WHERE link = %s"
-                    cursor.execute(sql_check, (link,))
-                    if cursor.fetchone():
-                        continue  
-                        
-                    # 2. 처음 보는 새 기사면 DB에 저장 (Insert)
-                    sql_insert = """
-                        INSERT INTO security_news (title, link, pub_date, source)
-                        VALUES (%s, %s, %s, %s)
-                    """
-                    cursor.execute(sql_insert, (title, link, pub_date, source))
-                    new_count += 1
-            
-            connection.commit()
-            print(f"[{datetime.now()}] 크롤링 완료! 오라클 DB에 새로 추가된 기사: {new_count}건")
-    except Exception as e:
-        print(f"크롤링 중 에러 발생: {e}")
+    try:
+        for source, url in RSS_URLS:
+            print(f"-> {source} 피드 가져오는 중...")
+            try:
+                feed = fetch_feed(url)
+                inserted, skipped = save_feed(connection, source, feed)
+                total_inserted += inserted
+                successful_sources += 1
+                print(f"   {source}: 신규 {inserted}건, 유효하지 않은 항목 {skipped}건")
+            except Exception as error:
+                connection.rollback()
+                failed_sources.append(source)
+                print(f"::warning title={source} RSS 수집 실패::{type(error).__name__}: {error}")
     finally:
         connection.close()
 
+    if successful_sources == 0:
+        raise RuntimeError("모든 RSS 피드 수집에 실패했습니다.")
+
+    if failed_sources:
+        print(f"일부 매체 수집 실패: {', '.join(failed_sources)}")
+
+    print(f"[{datetime.now()}] 크롤링 완료! 새로 추가된 기사: {total_inserted}건")
+    return total_inserted
+
+
 if __name__ == "__main__":
-    crawl_and_save()
+    try:
+        crawl_and_save()
+    except Exception as error:
+        print(f"::error title=보안뉴스 크롤링 실패::{type(error).__name__}: {error}")
+        sys.exit(1)
