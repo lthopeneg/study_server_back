@@ -8,7 +8,7 @@ from models import SecurityNews, DailyMainNews
 # '/api/news' 로 시작하는 주소 묶음 선언
 news_bp = Blueprint('news', __name__, url_prefix='/api/news')
 
-ISO_DATE_PATTERN = r'^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
+ISO_DATE_PREFIX_PATTERN = r'^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}'
 DEFAULT_PAGE_SIZE = 10
 MAX_PAGE_SIZE = 50
 
@@ -46,12 +46,15 @@ def get_news():
         }), 400
 
     try:
-        # 기존 데이터의 ISO 및 RFC 822 날짜 문자열을 MySQL에서 DateTime으로 변환합니다.
+        # ISO 8601(시간대 포함 가능)과 기존 RFC 822 날짜를 MySQL DateTime으로 변환합니다.
         # DB가 정렬과 페이지 슬라이싱을 담당해 전체 뉴스가 앱 메모리에 올라오지 않습니다.
         parsed_pub_date = case(
             (
-                SecurityNews.pub_date.op('REGEXP')(ISO_DATE_PATTERN),
-                func.str_to_date(SecurityNews.pub_date, '%Y-%m-%d %H:%i:%s')
+                SecurityNews.pub_date.op('REGEXP')(ISO_DATE_PREFIX_PATTERN),
+                func.str_to_date(
+                    func.replace(func.left(SecurityNews.pub_date, 19), 'T', ' '),
+                    '%Y-%m-%d %H:%i:%s'
+                )
             ),
             else_=func.str_to_date(SecurityNews.pub_date, '%a, %e %b %Y %H:%i:%s +0900')
         )
