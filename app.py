@@ -8,6 +8,7 @@ from extensions import db, jwt, mail, limiter
 from routes.auth import auth_bp
 from routes.news import news_bp
 from routes.user import user_bp
+from routes.practice import practice_bp
 
 # 테이블 생성을 위해 모델 임포트 (app_context보다 위에서 호출 필수)
 import models 
@@ -54,6 +55,7 @@ with app.app_context():
 app.register_blueprint(auth_bp)
 app.register_blueprint(news_bp)
 app.register_blueprint(user_bp)
+app.register_blueprint(practice_bp)
 
 # 방금 만든 연구 노트 API 라우터 등록
 from routes.notes import notes_bp
