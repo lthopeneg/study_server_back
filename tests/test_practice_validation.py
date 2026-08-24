@@ -5,7 +5,7 @@ from unittest.mock import patch
 from flask import Flask
 
 import routes.practice as practice_route
-from routes.practice import serialize_problem_summary, validate_variant
+from routes.practice import serialize_problem_summary, validate_generated_variants, validate_variant
 
 
 class PracticeValidationTests(unittest.TestCase):
@@ -122,6 +122,56 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(response.get_json()['status'], 'error')
+
+    def test_accepts_generated_pair_with_minimum_files(self):
+        generated = {
+            'variants': [
+                {
+                    'problem_type': 'line_selection',
+                    'hint': '입력부터 실행 지점까지 살펴보세요.',
+                    'files': [
+                        {'filename': 'app.py', 'content': 'value = input()'},
+                        {'filename': 'db.py', 'content': 'execute(value)'},
+                    ],
+                    'answers': [{'filename': 'db.py', 'line': 1}],
+                },
+                {
+                    'problem_type': 'secure_blank',
+                    'hint': '데이터와 명령을 분리하는 방법을 적용하세요.',
+                    'files': [
+                        {'filename': 'app.py', 'content': 'value = input()'},
+                        {'filename': 'db.py', 'content': 'execute(____)'},
+                    ],
+                    'answers': [{'filename': 'db.py', 'line': 1, 'answer': 'query, (value,)'}],
+                },
+            ],
+        }
+
+        variants = validate_generated_variants(generated, 2)
+
+        self.assertEqual([item['problem_type'] for item in variants], ['line_selection', 'secure_blank'])
+        self.assertEqual(len(variants[0]['files']), 2)
+
+    def test_rejects_generated_variant_below_minimum_files(self):
+        generated = {
+            'variants': [
+                {
+                    'problem_type': 'line_selection',
+                    'hint': '힌트',
+                    'files': [{'filename': 'app.py', 'content': 'value = input()'}],
+                    'answers': [{'filename': 'app.py', 'line': 1}],
+                },
+                {
+                    'problem_type': 'secure_blank',
+                    'hint': '힌트',
+                    'files': [{'filename': 'app.py', 'content': 'value = ____'}],
+                    'answers': [{'filename': 'app.py', 'line': 1, 'answer': 'input()'}],
+                },
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '최소 파일 수'):
+            validate_generated_variants(generated, 2)
 
 
 if __name__ == '__main__':

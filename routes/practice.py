@@ -4,8 +4,9 @@ import re
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-from extensions import db
+from extensions import db, limiter
 from models import PracticeProblemFile, PracticeProblemSet, PracticeProblemVariant, User
+from services.practice_ai import generate_problem_draft
 
 
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
@@ -18,6 +19,8 @@ MAX_FILES_PER_VARIANT = 20
 MAX_CODE_LENGTH = 100_000
 MAX_HINT_LENGTH = 5_000
 MAX_ANSWER_LENGTH = 20_000
+MAX_SCENARIO_LENGTH = 5_000
+MAX_EXTRA_REQUEST_LENGTH = 5_000
 
 
 def get_admin_user(login_id):
@@ -114,6 +117,84 @@ def serialize_problem_summary(problem_set):
         'created_at': problem_set.created_at.isoformat() if problem_set.created_at else None,
         'updated_at': problem_set.updated_at.isoformat() if problem_set.updated_at else None,
     }
+
+
+def validate_generated_variants(generated, minimum_files):
+    raw_variants = generated.get('variants') if isinstance(generated, dict) else None
+    if not isinstance(raw_variants, list):
+        raise ValueError('AI가 문제 유형 데이터를 반환하지 않았습니다.')
+    variant_map = {
+        item.get('problem_type'): item for item in raw_variants
+        if isinstance(item, dict) and item.get('problem_type') in REQUIRED_TYPES
+    }
+    if set(variant_map) != REQUIRED_TYPES:
+        raise ValueError('AI가 두 문제 유형을 모두 생성하지 않았습니다.')
+
+    validated_variants = []
+    for problem_type in ('line_selection', 'secure_blank'):
+        variant, error = validate_variant(variant_map[problem_type], problem_type)
+        if error:
+            raise ValueError(error)
+        if len(variant['files']) < minimum_files:
+            raise ValueError(f'AI가 {problem_type} 유형의 최소 파일 수를 충족하지 않았습니다.')
+        if not variant['hint'].strip():
+            raise ValueError(f'AI가 {problem_type} 유형의 힌트를 생성하지 않았습니다.')
+        validated_variants.append({
+            'problem_type': variant['problem_type'],
+            'hint': variant['hint'],
+            'files': [{'filename': item['filename'], 'content': item['content']} for item in variant['files']],
+            'answers': variant['answers'],
+        })
+    return validated_variants
+
+
+@practice_bp.route('/problems/generate', methods=['POST'])
+@jwt_required()
+@limiter.limit('5 per hour')
+def generate_problem_set():
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    data = request.get_json(silent=True) or {}
+    language = data.get('language')
+    difficulty = data.get('difficulty')
+    major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
+    minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
+    scenario, scenario_error = validate_text(data.get('scenario', ''), '문제 시나리오', MAX_SCENARIO_LENGTH)
+    extra_request, extra_error = validate_text(data.get('extra_request', ''), '추가 요청사항', MAX_EXTRA_REQUEST_LENGTH)
+    minimum_files = data.get('minimum_files')
+    reference_scope = data.get('reference_scope', 'latest')
+
+    if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
+        return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
+    if major_error or minor_error or scenario_error or extra_error:
+        return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
+    if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_FILES_PER_VARIANT:
+        return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_FILES_PER_VARIANT}여야 합니다.'}), 400
+    if reference_scope not in {'latest', 'all'}:
+        return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
+
+    try:
+        generated = generate_problem_draft(
+            language=language,
+            major_topic=major_topic,
+            minor_topic=minor_topic,
+            difficulty=difficulty,
+            minimum_files=minimum_files,
+            scenario=scenario,
+            extra_request=extra_request,
+            reference_scope=reference_scope,
+        )
+        validated_variants = validate_generated_variants(generated, minimum_files)
+    except ValueError as error:
+        current_app.logger.warning('Invalid AI practice problem response: %s', error)
+        return jsonify({'status': 'error', 'message': f'AI 생성 결과 검증에 실패했습니다: {error}'}), 422
+    except Exception:
+        current_app.logger.exception('AI practice problem generation failed')
+        return jsonify({'status': 'error', 'message': 'AI 문제 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502
+
+    return jsonify({'status': 'success', 'data': {'variants': validated_variants}})
 
 
 @practice_bp.route('/public/problems', methods=['GET'])
@@ -217,6 +298,10 @@ def create_problem_set():
             return jsonify({'status': 'error', 'message': variant_error}), 400
         validated_variants.append(variant)
 
+    creation_method = data.get('creation_method', 'manual')
+    if creation_method not in {'manual', 'ai'}:
+        return jsonify({'status': 'error', 'message': '출제 방식이 올바르지 않습니다.'}), 400
+
     problem_set = PracticeProblemSet(
         title=title,
         language=language,
@@ -224,7 +309,7 @@ def create_problem_set():
         minor_topic=minor_topic,
         difficulty=difficulty,
         scenario=scenario,
-        creation_method='manual',
+        creation_method=creation_method,
         status='draft',
         created_by=admin.id,
     )
