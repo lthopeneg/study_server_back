@@ -18,10 +18,45 @@ else:
     DEFAULT_NOTES_PATH = "/home/ubuntu/research_note"
 
 BASE_NOTES_PATH = os.getenv("RESEARCH_NOTES_PATH", DEFAULT_NOTES_PATH)
+SECTION_DIRECTORIES = {
+    "notes": "Notes",
+    "results": "Reports",
+}
+WEB_TEXT_EXTENSIONS = {".md", ".txt", ".json", ".csv"}
 
 def check_admin_role(login_id):
     user = User.query.filter_by(login_id=login_id).first()
     return user and user.role == 'ADMIN'
+
+@notes_bp.route('/api/notes/section-files', methods=['GET'])
+@jwt_required()
+def get_section_files():
+    current_user_id = get_jwt_identity()
+    if not check_admin_role(current_user_id):
+        return jsonify({"status": "error", "message": "접근 권한이 없습니다."}), 403
+
+    section = request.args.get('section', '').lower()
+    directory_name = SECTION_DIRECTORIES.get(section)
+    if not directory_name:
+        return jsonify({"status": "error", "message": "지원하지 않는 자료 구분입니다."}), 400
+
+    section_dir = os.path.join(BASE_NOTES_PATH, directory_name)
+    files = []
+    if os.path.isdir(section_dir):
+        for root, dirs, filenames in os.walk(section_dir):
+            dirs.sort()
+            for filename in sorted(filenames):
+                if os.path.splitext(filename)[1].lower() not in WEB_TEXT_EXTENSIONS:
+                    continue
+                full_path = os.path.join(root, filename)
+                relative_path = os.path.relpath(full_path, BASE_NOTES_PATH).replace('\\', '/')
+                files.append({"name": filename, "path": relative_path})
+
+    return jsonify({
+        "status": "success",
+        "section": section,
+        "files": files,
+    })
 
 @notes_bp.route('/api/notes/experiments', methods=['GET'])
 @jwt_required()
