@@ -101,6 +101,80 @@ def validate_variant(raw_variant, expected_type):
     return {'problem_type': expected_type, 'files': files, 'answers': answers}, None
 
 
+def serialize_problem_summary(problem_set):
+    return {
+        'id': problem_set.id,
+        'title': problem_set.title,
+        'language': problem_set.language,
+        'major_topic': problem_set.major_topic,
+        'minor_topic': problem_set.minor_topic,
+        'difficulty': problem_set.difficulty,
+        'creation_method': problem_set.creation_method,
+        'status': problem_set.status,
+        'created_at': problem_set.created_at.isoformat() if problem_set.created_at else None,
+        'updated_at': problem_set.updated_at.isoformat() if problem_set.updated_at else None,
+    }
+
+
+@practice_bp.route('/public/problems', methods=['GET'])
+def get_published_problem_sets():
+    language = request.args.get('language')
+    if language not in ALLOWED_LANGUAGES:
+        return jsonify({'status': 'error', 'message': '지원하지 않는 언어입니다.'}), 400
+
+    problem_sets = (
+        PracticeProblemSet.query
+        .filter_by(language=language, status='published')
+        .order_by(PracticeProblemSet.id.desc())
+        .all()
+    )
+    return jsonify({
+        'status': 'success',
+        'data': [serialize_problem_summary(problem_set) for problem_set in problem_sets],
+    })
+
+
+@practice_bp.route('/problems', methods=['GET'])
+@jwt_required()
+def get_problem_sets():
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    problem_sets = PracticeProblemSet.query.order_by(PracticeProblemSet.id.desc()).all()
+    return jsonify({
+        'status': 'success',
+        'data': [serialize_problem_summary(problem_set) for problem_set in problem_sets],
+    })
+
+
+@practice_bp.route('/problems/<int:problem_set_id>/status', methods=['PATCH'])
+@jwt_required()
+def update_problem_status(problem_set_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    data = request.get_json(silent=True) or {}
+    status = data.get('status')
+    if status not in {'draft', 'published'}:
+        return jsonify({'status': 'error', 'message': '공개 상태가 올바르지 않습니다.'}), 400
+
+    problem_set = db.session.get(PracticeProblemSet, problem_set_id)
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
+
+    problem_set.status = status
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Practice problem status update failed')
+        return jsonify({'status': 'error', 'message': '공개 상태 변경에 실패했습니다.'}), 500
+
+    return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
+
+
 @practice_bp.route('/problems', methods=['POST'])
 @jwt_required()
 def create_problem_set():
