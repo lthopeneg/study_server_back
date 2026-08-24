@@ -40,6 +40,10 @@ def validate_variant(raw_variant, expected_type):
     if not isinstance(raw_variant, dict) or raw_variant.get('problem_type') != expected_type:
         return None, '두 문제 유형이 모두 필요합니다.'
 
+    hint, error = validate_text(raw_variant.get('hint', ''), '힌트', MAX_HINT_LENGTH)
+    if error:
+        return None, error
+
     raw_files = raw_variant.get('files')
     if not isinstance(raw_files, list) or not 1 <= len(raw_files) <= MAX_FILES_PER_VARIANT:
         return None, f'유형별 파일은 1~{MAX_FILES_PER_VARIANT}개여야 합니다.'
@@ -58,9 +62,6 @@ def validate_variant(raw_variant, expected_type):
         filenames.add(filename)
 
         content, error = validate_text(raw_file.get('content', ''), '코드', MAX_CODE_LENGTH)
-        if error:
-            return None, error
-        hint, error = validate_text(raw_file.get('hint', ''), '힌트', MAX_HINT_LENGTH)
         if error:
             return None, error
         files.append({'filename': filename, 'content': content, 'hint': hint, 'display_order': index})
@@ -98,13 +99,12 @@ def validate_variant(raw_variant, expected_type):
 
     if not answers:
         return None, '각 문제 유형에 정답을 하나 이상 지정해주세요.'
-    return {'problem_type': expected_type, 'files': files, 'answers': answers}, None
+    return {'problem_type': expected_type, 'hint': hint, 'files': files, 'answers': answers}, None
 
 
 def serialize_problem_summary(problem_set):
     return {
         'id': problem_set.id,
-        'title': problem_set.title,
         'language': problem_set.language,
         'major_topic': problem_set.major_topic,
         'minor_topic': problem_set.minor_topic,

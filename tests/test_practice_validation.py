@@ -45,6 +45,23 @@ class PracticeValidationTests(unittest.TestCase):
         self.assertIsNone(variant)
         self.assertIn('언더바 4개', error)
 
+    def test_applies_one_hint_to_all_files_in_variant(self):
+        variant, error = validate_variant(
+            {
+                'problem_type': 'line_selection',
+                'hint': '이 유형이 공유하는 힌트',
+                'files': [
+                    {'filename': 'app.py', 'content': 'first'},
+                    {'filename': 'service.py', 'content': 'second'},
+                ],
+                'answers': [{'filename': 'app.py', 'line': 1}],
+            },
+            'line_selection',
+        )
+
+        self.assertIsNone(error)
+        self.assertTrue(all(file['hint'] == '이 유형이 공유하는 힌트' for file in variant['files']))
+
     def test_rejects_path_like_filename(self):
         variant, error = validate_variant(
             {
