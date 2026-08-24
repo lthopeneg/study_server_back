@@ -85,12 +85,33 @@ def get_news():
 
 @news_bp.route('/ai-history', methods=['GET'])
 def get_ai_news_history():
+    page = parse_positive_int_arg('page', 1)
+    limit = parse_positive_int_arg('limit', 12, MAX_PAGE_SIZE)
+    if page is None or limit is None:
+        return jsonify({
+            "status": "error",
+            "message": f"page는 1 이상의 정수이고 limit은 1~{MAX_PAGE_SIZE} 사이의 정수여야 합니다."
+        }), 400
+
     try:
-        news_list = DailyMainNews.query.order_by(DailyMainNews.created_at.desc()).all()
+        total_count = DailyMainNews.query.count()
+        news_list = (
+            DailyMainNews.query
+            .order_by(DailyMainNews.created_at.desc(), DailyMainNews.id.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+            .all()
+        )
         result = [{
             "id": n.id, "title": n.title, "original_url": n.original_url, "created_at": n.created_at.strftime("%Y-%m-%d")
         } for n in news_list]
-        return jsonify({"status": "success", "data": result}), 200
+        return jsonify({
+            "status": "success",
+            "data": result,
+            "total": total_count,
+            "page": page,
+            "total_pages": (total_count + limit - 1) // limit
+        }), 200
     except Exception:
         current_app.logger.exception("AI news history query failed")
         return jsonify({"status": "error", "message": "AI 뉴스 기록을 불러오는데 실패했습니다."}), 500

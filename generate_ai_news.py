@@ -1,6 +1,8 @@
 import os
 import json
+import sys
 from datetime import datetime, date
+from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 # 🚨 최신 라이브러리로 변경 (pip install google-genai 필요)
@@ -17,6 +19,7 @@ from models import SecurityNews, DailyMainNews
 # ==========================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PROMPT_DIR = Path(__file__).resolve().parent / "News_prompt"
 
 if not GEMINI_API_KEY:
     raise ValueError("환경 변수에 GEMINI_API_KEY가 없습니다!")
@@ -69,10 +72,13 @@ def call_llm_with_fallback(prompt, is_json=False):
             print(f"   ❌ OpenAI 호출 마저 실패: {openai_err}")
             raise RuntimeError("모든 AI API 호출에 실패했습니다.")
 
-def fetch_today_news():
-    """오늘 DB에 수집된 뉴스 목록의 '제목'과 '링크'만 가져옵니다."""
-    today = date.today()
-    news_list = SecurityNews.query.filter(db.func.date(SecurityNews.created_at) == today).all()
+def fetch_pending_news():
+    """마지막 AI 기사 생성 이후 수집되어 아직 처리되지 않은 뉴스를 가져옵니다."""
+    latest_ai_news = DailyMainNews.query.order_by(DailyMainNews.created_at.desc()).first()
+    query = SecurityNews.query
+    if latest_ai_news and latest_ai_news.created_at:
+        query = query.filter(SecurityNews.created_at > latest_ai_news.created_at)
+    news_list = query.order_by(SecurityNews.created_at.asc(), SecurityNews.id.asc()).all()
     return [{"id": n.id, "title": n.title, "link": n.link} for n in news_list]
 
 def scrape_article_body(url):
@@ -80,6 +86,7 @@ def scrape_article_body(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         paragraphs = soup.find_all('p')
         body_text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
@@ -97,7 +104,7 @@ def generate_ai_news():
             return
 
         print(f"[{datetime.now()}] 🤖 AI 자동 메인 뉴스 생성 파이프라인 시작 (2단계 압축 선발 + 이중화)...")
-        news_list = fetch_today_news()
+        news_list = fetch_pending_news()
         
         if not news_list:
             print("오늘 수집된 뉴스가 없습니다.")
@@ -108,7 +115,7 @@ def generate_ai_news():
         # ==========================================================
         print(f"-> 1단계(예선): 오늘 수집된 {len(news_list)}개의 기사 중 TOP 3 후보 선정 중...")
         
-        with open('News_prompt/check_prompt.txt', 'r', encoding='utf-8') as f:
+        with open(PROMPT_DIR / 'check_prompt.txt', 'r', encoding='utf-8') as f:
             check_prompt_prelim = f.read()
             
         candidates_text_prelim = "오늘의 기사 전체 목록 (제목만 제공):\n"
@@ -137,8 +144,7 @@ def generate_ai_news():
             print("   [예선 통과] 데이터 확보 완료. URL 추출 중...")
         except Exception as e:
             print("   JSON 파싱 에러 (예선전):", e)
-            print("   응답 내용:", response_prelim_text)
-            return
+            raise RuntimeError("예선 AI 응답을 JSON으로 해석할 수 없습니다.") from e
             
         print("   (API 호출 속도 조절을 위해 5초 대기합니다...)")
         time.sleep(5)
@@ -148,7 +154,7 @@ def generate_ai_news():
         # ==========================================================
         print("-> 2단계(결승): TOP 3 기사 본문 검증 및 최종 우승 기사 선정 중...")
         
-        with open('News_prompt/check_prompt_final.txt', 'r', encoding='utf-8') as f:
+        with open(PROMPT_DIR / 'check_prompt_final.txt', 'r', encoding='utf-8') as f:
             check_prompt_final = f.read()
             
         candidates_text_final = "TOP 3 후보 기사 상세 내용:\n"
@@ -163,7 +169,11 @@ def generate_ai_news():
                 
             if not url:
                 continue
-            title = next((n['title'] for n in news_list if n['link'] == url), "제목 없음")
+            matched_news = next((n for n in news_list if n['link'] == url), None)
+            if not matched_news:
+                print("   [경고] AI가 뉴스 목록에 없는 URL을 반환하여 제외합니다.")
+                continue
+            title = matched_news['title']
             
             full_body = scrape_article_body(url)
             
@@ -181,8 +191,7 @@ def generate_ai_news():
             
         # 살아남은 후보가 하나도 없다면 취소
         if not valid_candidates:
-            print("   ❌ TOP 3 후보 모두 본문을 가져올 수 없습니다. 오늘 뉴스 생성을 취소합니다.")
-            return
+            raise RuntimeError("TOP 3 후보 모두 본문을 가져올 수 없습니다.")
             
         # 살아남은 정상 기사들만 AI에게 제공
         for i, cand in enumerate(valid_candidates):
@@ -197,10 +206,14 @@ def generate_ai_news():
             selected_title = selected_info.get("selected_title")
             selected_url = selected_info.get("selected_url")
             selection_reason = selected_info.get("selection_reason")
+            if not selected_title or not selected_url:
+                raise ValueError("필수 선정 결과가 없습니다.")
+            if not any(candidate['url'] == selected_url for candidate in valid_candidates):
+                raise ValueError("최종 선정 URL이 검증된 후보 목록에 없습니다.")
             print(f"   [최종 선정 완료] {selected_title}")
         except Exception as e:
             print("   JSON 파싱 에러 (결승전):", e)
-            return
+            raise RuntimeError("결승 AI 응답이 올바르지 않습니다.") from e
         print("   (API 호출 속도 조절을 위해 5초 대기합니다...)")
         time.sleep(5)
         # ==========================================================
@@ -208,7 +221,7 @@ def generate_ai_news():
         # ==========================================================
         print("-> 3단계: AI 심층 요약 및 마크다운 기사 작성 중...")
         
-        with open('News_prompt/make_news_prompt.txt', 'r', encoding='utf-8') as f:
+        with open(PROMPT_DIR / 'make_news_prompt.txt', 'r', encoding='utf-8') as f:
             make_prompt = f.read()
             
         # 이미 2단계에서 검증해둔 본문(full_body)을 찾아서 재활용합니다 (스크래핑 2번 할 필요 방지)
@@ -218,20 +231,16 @@ def generate_ai_news():
                 article_body = cand['full_body']
                 break
                 
-        # 만약 URL 매칭이 안됐다면 한 번 더 긁어옵니다
-        if not article_body:
-            article_body = scrape_article_body(selected_url)
-            
-        # 최종 방어벽
         if not article_body or len(article_body.strip()) < 50:
-            print("   ❌ 최종 기사 본문 확보 실패. 작성을 취소합니다.")
-            return
+            raise RuntimeError("최종 기사 본문을 확보하지 못했습니다.")
             
         safe_url = selected_url.replace('http://', 'https://')
         
         final_prompt_3 = f"{make_prompt}\n\n[원문 제목]: {selected_title}\n[원문 URL]: {safe_url}\n[본문 내용]:\n{article_body}"
         
         final_markdown = call_llm_with_fallback(final_prompt_3, is_json=False)
+        if not final_markdown or not final_markdown.strip():
+            raise RuntimeError("AI가 기사 본문을 생성하지 않았습니다.")
         
         # ==========================================================
         # Step 4: DB 저장
@@ -243,10 +252,18 @@ def generate_ai_news():
             original_url=selected_url,
             selection_reason=selection_reason
         )
-        db.session.add(new_article)
-        db.session.commit()
+        try:
+            db.session.add(new_article)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
         
         print("✅ 2단계 압축 선발 + AI 폴백 이중화 파이프라인이 성공적으로 완료되었습니다!")
 
 if __name__ == "__main__":
-    generate_ai_news()
+    try:
+        generate_ai_news()
+    except Exception as error:
+        print(f"::error title=AI 뉴스 생성 실패::{type(error).__name__}: {error}")
+        sys.exit(1)
