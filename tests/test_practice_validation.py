@@ -5,7 +5,12 @@ from unittest.mock import patch
 from flask import Flask
 
 import routes.practice as practice_route
-from routes.practice import serialize_problem_summary, validate_generated_variants, validate_variant
+from routes.practice import (
+    normalize_generated_blank_answers,
+    serialize_problem_summary,
+    validate_generated_variants,
+    validate_variant,
+)
 
 
 class PracticeValidationTests(unittest.TestCase):
@@ -172,6 +177,31 @@ class PracticeValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, '최소 파일 수'):
             validate_generated_variants(generated, 2)
+
+    def test_corrects_generated_blank_answer_line_from_code(self):
+        variant = {
+            'problem_type': 'secure_blank',
+            'hint': '힌트',
+            'files': [{'filename': 'buffer.py', 'content': 'first\nif size > ____:\n    raise ValueError()'}],
+            'answers': [{'filename': 'buffer.py', 'line': 3, 'answer': 'BUFFER_SIZE'}],
+        }
+
+        normalized = normalize_generated_blank_answers(variant)
+
+        self.assertEqual(normalized['answers'][0]['line'], 2)
+
+    def test_normalizes_long_generated_blank_marker(self):
+        variant = {
+            'problem_type': 'secure_blank',
+            'hint': '힌트',
+            'files': [{'filename': 'buffer.py', 'content': 'if size > ________:\n    raise ValueError()'}],
+            'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'BUFFER_SIZE'}],
+        }
+
+        normalized = normalize_generated_blank_answers(variant)
+
+        self.assertIn('____', normalized['files'][0]['content'])
+        self.assertNotIn('________', normalized['files'][0]['content'])
 
 
 if __name__ == '__main__':
