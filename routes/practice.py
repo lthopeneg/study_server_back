@@ -14,6 +14,11 @@ from services.practice_ai import generate_problem_draft
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
 
 ALLOWED_LANGUAGES = {'Python', 'C#'}
+ALLOWED_RUNTIME_PLATFORMS = {'dotnet', 'dotnet_framework'}
+ALLOWED_PROJECT_TYPES = {
+    'dotnet': {'auto', 'console', 'aspnet_core_mvc', 'aspnet_core_web_api'},
+    'dotnet_framework': {'auto', 'console', 'aspnet_mvc5', 'aspnet_web_api2'},
+}
 ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
 ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
@@ -124,6 +129,8 @@ def serialize_problem_summary(problem_set):
     return {
         'id': problem_set.id,
         'language': problem_set.language,
+        'runtime_platform': getattr(problem_set, 'runtime_platform', None),
+        'project_type': getattr(problem_set, 'project_type', None),
         'major_topic': problem_set.major_topic,
         'minor_topic': problem_set.minor_topic,
         'difficulty': problem_set.difficulty,
@@ -175,11 +182,21 @@ def validate_problem_set_payload(data):
         return None, error
 
     language = data.get('language')
+    runtime_platform = data.get('runtime_platform')
+    project_type = data.get('project_type')
     difficulty = data.get('difficulty')
     major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
     minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return None, '언어 또는 난이도가 올바르지 않습니다.'
+    if language == 'C#':
+        if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
+            return None, 'C# 실행 환경이 올바르지 않습니다.'
+        if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
+            return None, '선택한 실행 환경에서 지원하지 않는 프로젝트 유형입니다.'
+    else:
+        runtime_platform = None
+        project_type = None
     if major_error or minor_error:
         return None, major_error or minor_error
 
@@ -208,6 +225,8 @@ def validate_problem_set_payload(data):
         'title': title,
         'scenario': scenario,
         'language': language,
+        'runtime_platform': runtime_platform,
+        'project_type': project_type,
         'major_topic': major_topic,
         'minor_topic': minor_topic,
         'difficulty': difficulty,
@@ -234,6 +253,22 @@ def build_problem_archive(problem_set):
         'secure_blank': 'type2_secure_blank',
     }
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zip_file:
+        platform_labels = {'dotnet': '.NET', 'dotnet_framework': '.NET Framework'}
+        project_labels = {
+            'auto': '자동 선택', 'console': 'Console',
+            'aspnet_core_mvc': 'ASP.NET Core MVC',
+            'aspnet_core_web_api': 'ASP.NET Core Web API',
+            'aspnet_mvc5': 'ASP.NET MVC 5', 'aspnet_web_api2': 'ASP.NET Web API 2',
+        }
+        metadata_lines = [f'언어: {problem_set.language}']
+        if problem_set.language == 'C#':
+            runtime_platform = getattr(problem_set, 'runtime_platform', None)
+            project_type = getattr(problem_set, 'project_type', None)
+            metadata_lines.extend([
+                f'실행 환경: {platform_labels.get(runtime_platform, "미지정")}',
+                f'프로젝트 유형: {project_labels.get(project_type, "미지정")}',
+            ])
+        zip_file.writestr('problem_info.txt', '\n'.join(metadata_lines).encode('utf-8-sig'))
         for variant in sorted(problem_set.variants, key=lambda item: item.problem_type):
             folder = folder_names.get(variant.problem_type)
             if not folder:
@@ -491,6 +526,8 @@ def generate_problem_set():
 
     data = request.get_json(silent=True) or {}
     language = data.get('language')
+    runtime_platform = data.get('runtime_platform')
+    project_type = data.get('project_type')
     difficulty = data.get('difficulty')
     major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
     minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
@@ -502,6 +539,14 @@ def generate_problem_set():
 
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
+    if language == 'C#':
+        if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
+            return jsonify({'status': 'error', 'message': 'C# 실행 환경이 올바르지 않습니다.'}), 400
+        if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
+            return jsonify({'status': 'error', 'message': '선택한 실행 환경에서 지원하지 않는 프로젝트 유형입니다.'}), 400
+    else:
+        runtime_platform = None
+        project_type = None
     if major_error or minor_error or scenario_error or extra_error:
         return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
     if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_FILES_PER_VARIANT:
@@ -514,6 +559,8 @@ def generate_problem_set():
     try:
         generated = generate_problem_draft(
             language=language,
+            runtime_platform=runtime_platform,
+            project_type=project_type,
             major_topic=major_topic,
             minor_topic=minor_topic,
             difficulty=difficulty,
@@ -615,7 +662,7 @@ def update_problem_set(problem_set_id):
     if error:
         return jsonify({'status': 'error', 'message': error}), 400
 
-    for field in ('title', 'scenario', 'language', 'major_topic', 'minor_topic', 'difficulty', 'creation_method'):
+    for field in ('title', 'scenario', 'language', 'runtime_platform', 'project_type', 'major_topic', 'minor_topic', 'difficulty', 'creation_method'):
         setattr(problem_set, field, payload[field])
     try:
         problem_set.variants.clear()
@@ -688,6 +735,8 @@ def create_problem_set():
     problem_set = PracticeProblemSet(
         title=payload['title'],
         language=payload['language'],
+        runtime_platform=payload['runtime_platform'],
+        project_type=payload['project_type'],
         major_topic=payload['major_topic'],
         minor_topic=payload['minor_topic'],
         difficulty=payload['difficulty'],

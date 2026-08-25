@@ -104,6 +104,8 @@ class PracticeValidationTests(unittest.TestCase):
             id=7,
             title='SQL 삽입 문제',
             language='Python',
+            runtime_platform=None,
+            project_type=None,
             major_topic='입력데이터 검증 및 표현',
             minor_topic='SQL 삽입',
             difficulty='beginner',
@@ -286,6 +288,8 @@ class PracticeValidationTests(unittest.TestCase):
             id=12,
             title='내부 제목',
             language='Python',
+            runtime_platform=None,
+            project_type=None,
             major_topic='입력데이터 검증 및 표현',
             minor_topic='메모리 버퍼 오버플로우',
             difficulty='intermediate',
@@ -335,6 +339,7 @@ class PracticeValidationTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as zip_file:
             names = set(zip_file.namelist())
             self.assertIn('type1_line_selection/buffer.py', names)
+            self.assertIn('problem_info.txt', names)
             self.assertIn('type1_line_selection/hint.txt', names)
             self.assertIn('type1_line_selection/answers.txt', names)
             self.assertIn('type2_secure_blank/buffer.py', names)

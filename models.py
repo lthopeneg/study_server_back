@@ -41,6 +41,8 @@ class PracticeProblemSet(db.Model):
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     title = db.Column(db.String(255), nullable=False)
     language = db.Column(db.String(20), nullable=False)
+    runtime_platform = db.Column(db.String(30), nullable=True)
+    project_type = db.Column(db.String(30), nullable=True)
     major_topic = db.Column(db.String(100), nullable=False)
     minor_topic = db.Column(db.String(255), nullable=False)
     difficulty = db.Column(db.String(20), nullable=False)
