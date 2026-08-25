@@ -23,6 +23,7 @@ MAX_HINT_LENGTH = 5_000
 MAX_ANSWER_LENGTH = 20_000
 MAX_SCENARIO_LENGTH = 5_000
 MAX_EXTRA_REQUEST_LENGTH = 5_000
+MAX_SUBMITTED_ANSWERS = 500
 
 
 def get_admin_user(login_id):
@@ -120,6 +121,117 @@ def serialize_problem_summary(problem_set):
         'created_at': problem_set.created_at.isoformat() if problem_set.created_at else None,
         'updated_at': problem_set.updated_at.isoformat() if problem_set.updated_at else None,
     }
+
+
+def serialize_public_problem_detail(problem_set):
+    variants = []
+    for variant in sorted(problem_set.variants, key=lambda item: item.problem_type):
+        files = sorted(variant.files, key=lambda item: (item.display_order, getattr(item, 'id', 0) or 0))
+        variants.append({
+            'problem_type': variant.problem_type,
+            'hint': files[0].hint if files else '',
+            'files': [
+                {'filename': item.filename, 'content': item.content, 'display_order': item.display_order}
+                for item in files
+            ],
+        })
+    return {
+        **serialize_problem_summary(problem_set),
+        'scenario': problem_set.scenario or '',
+        'variants': variants,
+    }
+
+
+def _submission_variant_map(raw_variants):
+    if not isinstance(raw_variants, list) or len(raw_variants) != len(REQUIRED_TYPES):
+        raise ValueError('두 문제 유형의 답안을 모두 제출해주세요.')
+    variant_map = {
+        item.get('problem_type'): item for item in raw_variants
+        if isinstance(item, dict) and item.get('problem_type') in REQUIRED_TYPES
+    }
+    if set(variant_map) != REQUIRED_TYPES:
+        raise ValueError('두 문제 유형의 답안을 모두 제출해주세요.')
+    return variant_map
+
+
+def grade_problem_submission(problem_set, raw_variants):
+    submitted_map = _submission_variant_map(raw_variants)
+    stored_map = {variant.problem_type: variant for variant in problem_set.variants}
+    if set(stored_map) != REQUIRED_TYPES:
+        raise ValueError('저장된 문제 유형 구성이 올바르지 않습니다.')
+
+    results = []
+    for problem_type in ('line_selection', 'secure_blank'):
+        stored_variant = stored_map[problem_type]
+        try:
+            expected_answers = json.loads(stored_variant.answers_json)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError('저장된 정답 형식이 올바르지 않습니다.') from error
+        submitted_answers = submitted_map[problem_type].get('answers')
+        if not isinstance(submitted_answers, list) or len(submitted_answers) > MAX_SUBMITTED_ANSWERS:
+            raise ValueError('제출한 정답 형식이 올바르지 않습니다.')
+
+        line_counts = {
+            item.filename: max(1, len(item.content.splitlines()))
+            for item in stored_variant.files
+        }
+        submitted_keys = set()
+        normalized_answers = []
+        for answer in submitted_answers:
+            if not isinstance(answer, dict):
+                raise ValueError('제출한 정답 형식이 올바르지 않습니다.')
+            filename = answer.get('filename')
+            line = answer.get('line')
+            if filename not in line_counts or isinstance(line, bool) or not isinstance(line, int):
+                raise ValueError('제출한 파일명 또는 라인 번호가 올바르지 않습니다.')
+            if line < 1 or line > line_counts[filename]:
+                raise ValueError('제출한 라인 번호가 코드 범위를 벗어났습니다.')
+            key = (filename, line)
+            if key in submitted_keys:
+                raise ValueError('같은 답안을 중복 제출할 수 없습니다.')
+            submitted_keys.add(key)
+            normalized = {'filename': filename, 'line': line}
+            if problem_type == 'secure_blank':
+                answer_text = answer.get('answer')
+                if not isinstance(answer_text, str) or len(answer_text) > MAX_ANSWER_LENGTH:
+                    raise ValueError('빈칸 정답 형식이 올바르지 않습니다.')
+                normalized['answer'] = answer_text.strip()
+            normalized_answers.append(normalized)
+
+        if problem_type == 'line_selection':
+            expected_keys = {(item['filename'], item['line']) for item in expected_answers}
+            is_correct = submitted_keys == expected_keys
+            results.append({
+                'problem_type': problem_type,
+                'correct': is_correct,
+                'submitted_count': len(submitted_keys),
+                'expected_count': len(expected_keys),
+            })
+            continue
+
+        expected_map = {(item['filename'], item['line']): item['answer'].strip() for item in expected_answers}
+        if any(key not in expected_map for key in submitted_keys):
+            raise ValueError('빈칸이 아닌 위치의 정답을 제출할 수 없습니다.')
+        submitted_answer_map = {
+            (item['filename'], item['line']): item['answer'] for item in normalized_answers
+        }
+        answer_results = [
+            {
+                'filename': filename,
+                'line': line,
+                'correct': submitted_answer_map.get((filename, line)) == expected_answer,
+            }
+            for (filename, line), expected_answer in expected_map.items()
+        ]
+        results.append({
+            'problem_type': problem_type,
+            'correct': all(item['correct'] for item in answer_results),
+            'correct_count': sum(1 for item in answer_results if item['correct']),
+            'total_count': len(answer_results),
+            'answers': answer_results,
+        })
+
+    return {'correct': all(item['correct'] for item in results), 'variants': results}
 
 
 def normalize_generated_blank_answers(raw_variant):
@@ -271,6 +383,29 @@ def get_published_problem_sets():
         'status': 'success',
         'data': [serialize_problem_summary(problem_set) for problem_set in problem_sets],
     })
+
+
+@practice_bp.route('/public/problems/<int:problem_set_id>', methods=['GET'])
+def get_published_problem_set(problem_set_id):
+    problem_set = PracticeProblemSet.query.filter_by(id=problem_set_id, status='published').first()
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '활성화된 문제를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'data': serialize_public_problem_detail(problem_set)})
+
+
+@practice_bp.route('/public/problems/<int:problem_set_id>/submit', methods=['POST'])
+@jwt_required()
+@limiter.limit('30 per minute')
+def submit_published_problem_set(problem_set_id):
+    problem_set = PracticeProblemSet.query.filter_by(id=problem_set_id, status='published').first()
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '활성화된 문제를 찾을 수 없습니다.'}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        result = grade_problem_submission(problem_set, data.get('variants'))
+    except ValueError as error:
+        return jsonify({'status': 'error', 'message': str(error)}), 400
+    return jsonify({'status': 'success', 'data': result})
 
 
 @practice_bp.route('/problems', methods=['GET'])
