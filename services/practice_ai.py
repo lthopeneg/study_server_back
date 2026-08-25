@@ -76,7 +76,9 @@ def _build_prompt(*, language, major_topic, minor_topic, difficulty, minimum_fil
 
 line_selection:
 - 실행 가능한 하나의 프로젝트를 구성합니다.
-- 취약점에 해당하는 모든 정답을 파일명과 1부터 시작하는 라인 번호로 반환합니다.
+- 취약점에 해당하는 모든 정답을 파일명, 1부터 시작하는 라인 번호, 해당 라인의 실제 코드 문자열(code)로 반환합니다.
+- code에는 주석이나 설명이 아니라 files의 content에 실제로 존재하는 실행 코드 한 줄을 공백만 정리해 그대로 작성합니다.
+- 정답은 주석, 빈 줄 또는 단순 시나리오 설명 라인이 될 수 없습니다.
 - 힌트는 하나만 생성합니다. 외부 입력 유입, 불충분한 검증 또는 안전하지 않은 처리, 최종 사용 지점을 코드 흐름에 맞춰 설명합니다.
 - Source/Validation/Sink 분석 필드는 별도로 만들지 않습니다.
 - 단계 구분이 부자연스러운 주제는 억지로 구분하지 않습니다.
@@ -86,6 +88,8 @@ secure_blank:
 - 안전한 구현이 포함된 실행 가능한 하나의 프로젝트를 구성합니다.
 - 학습자가 작성할 위치는 정확히 언더바 4개(____)로 표시합니다.
 - 모든 빈칸의 정확한 정답을 파일명과 1부터 시작하는 라인 번호와 함께 반환합니다.
+- 각 빈칸의 정답은 함수명, 메서드명, 변수명, 상수 같은 단일 식별자 하나가 되도록 주변 코드를 구성합니다.
+- 여러 토큰으로 이루어진 표현식이나 코드 한 줄 전체를 정답으로 만들지 않습니다.
 - 복수 정답이 가능한 빈칸은 피합니다.
 - 힌트는 유형 전체에서 공유하는 하나만 생성하며 정답 코드를 직접 노출하지 않습니다.
 
@@ -100,8 +104,8 @@ secure_blank:
 [JSON 형식]
 {{
   "variants": [
-    {{"problem_type":"line_selection","hint":"힌트","files":[{{"filename":"app{extension}","content":"전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1}}]}},
-    {{"problem_type":"secure_blank","hint":"힌트","files":[{{"filename":"app{extension}","content":"____ 포함 전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1,"answer":"정확한 코드"}}]}}
+    {{"problem_type":"line_selection","hint":"힌트","files":[{{"filename":"app{extension}","content":"전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1,"code":"정답 라인의 실제 코드"}}]}},
+    {{"problem_type":"secure_blank","hint":"힌트","files":[{{"filename":"app{extension}","content":"____ 포함 전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1,"answer":"단일_식별자"}}]}}
   ]
 }}
 

@@ -10,6 +10,7 @@ from routes.practice import (
     build_problem_archive,
     grade_problem_submission,
     normalize_generated_blank_answers,
+    normalize_generated_line_answers,
     serialize_admin_problem_detail,
     serialize_public_problem_detail,
     serialize_problem_summary,
@@ -40,7 +41,7 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertEqual(len(variant['files']), 2)
-        self.assertEqual(variant['answers'][0], {'filename': 'a.py', 'line': 2})
+        self.assertEqual(variant['answers'][0], {'filename': 'a.py', 'line': 2, 'code': 'second'})
 
     def test_rejects_blank_answer_without_four_underscores(self):
         variant, error = validate_variant(
@@ -143,16 +144,16 @@ class PracticeValidationTests(unittest.TestCase):
                         {'filename': 'app.py', 'content': 'value = input()'},
                         {'filename': 'db.py', 'content': 'execute(value)'},
                     ],
-                    'answers': [{'filename': 'db.py', 'line': 1}],
+                    'answers': [{'filename': 'db.py', 'line': 1, 'code': 'execute(value)'}],
                 },
                 {
                     'problem_type': 'secure_blank',
                     'hint': '데이터와 명령을 분리하는 방법을 적용하세요.',
                     'files': [
                         {'filename': 'app.py', 'content': 'value = input()'},
-                        {'filename': 'db.py', 'content': 'execute(____)'},
+                        {'filename': 'db.py', 'content': 'execute(query, ____)'},
                     ],
-                    'answers': [{'filename': 'db.py', 'line': 1, 'answer': 'query, (value,)'}],
+                    'answers': [{'filename': 'db.py', 'line': 1, 'answer': 'value'}],
                 },
             ],
         }
@@ -169,7 +170,7 @@ class PracticeValidationTests(unittest.TestCase):
                     'problem_type': 'line_selection',
                     'hint': '힌트',
                     'files': [{'filename': 'app.py', 'content': 'value = input()'}],
-                    'answers': [{'filename': 'app.py', 'line': 1}],
+                    'answers': [{'filename': 'app.py', 'line': 1, 'code': 'value = input()'}],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -182,6 +183,27 @@ class PracticeValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, '최소 파일 수'):
             validate_generated_variants(generated, 2)
+
+    def test_rejects_generated_blank_expression_answer(self):
+        generated = {
+            'variants': [
+                {
+                    'problem_type': 'line_selection',
+                    'hint': '힌트',
+                    'files': [{'filename': 'buffer.py', 'content': 'copy(destination, data)'}],
+                    'answers': [{'filename': 'buffer.py', 'line': 1, 'code': 'copy(destination, data)'}],
+                },
+                {
+                    'problem_type': 'secure_blank',
+                    'hint': '힌트',
+                    'files': [{'filename': 'buffer.py', 'content': 'size = ____'}],
+                    'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'min(size, limit)'}],
+                },
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '단일 식별자'):
+            validate_generated_variants(generated, 1)
 
     def test_corrects_generated_blank_answer_line_from_code(self):
         variant = {
@@ -207,6 +229,57 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertIn('____', normalized['files'][0]['content'])
         self.assertNotIn('________', normalized['files'][0]['content'])
+
+    def test_corrects_generated_line_answer_using_code_anchor(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'hint': '힌트',
+            'files': [{'filename': 'buffer.py', 'content': '# 설명\ndestination = make_buffer()\ncopy(destination, data)'}],
+            'answers': [{'filename': 'buffer.py', 'line': 1, 'code': 'copy(destination, data)'}],
+        }
+
+        normalized = normalize_generated_line_answers(variant)
+
+        self.assertEqual(normalized['answers'][0]['line'], 3)
+
+    def test_rejects_generated_line_answer_without_code_anchor(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'files': [{'filename': 'buffer.py', 'content': 'copy(destination, data)'}],
+            'answers': [{'filename': 'buffer.py', 'line': 1}],
+        }
+
+        with self.assertRaisesRegex(ValueError, '실제 코드 한 줄'):
+            normalize_generated_line_answers(variant)
+
+    def test_rejects_comment_as_line_selection_answer(self):
+        variant, error = validate_variant(
+            {
+                'problem_type': 'line_selection',
+                'hint': '힌트',
+                'files': [{'filename': 'buffer.py', 'content': '# 메모리 복사 설명\ncopy(destination, data)'}],
+                'answers': [{'filename': 'buffer.py', 'line': 1}],
+            },
+            'line_selection',
+        )
+
+        self.assertIsNone(variant)
+        self.assertIn('주석', error)
+
+    def test_builds_completed_blank_line_and_answer_kind(self):
+        variant, error = validate_variant(
+            {
+                'problem_type': 'secure_blank',
+                'hint': '힌트',
+                'files': [{'filename': 'buffer.py', 'content': 'copy_size = min(packet_size, ____)'}],
+                'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'BUFFER_SIZE'}],
+            },
+            'secure_blank',
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(variant['answers'][0]['answer_kind'], 'identifier')
+        self.assertEqual(variant['answers'][0]['completed_line'], 'copy_size = min(packet_size, BUFFER_SIZE)')
 
     def make_published_problem(self):
         return SimpleNamespace(
