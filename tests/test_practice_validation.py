@@ -1,4 +1,5 @@
 import unittest
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -6,6 +7,7 @@ from flask import Flask
 
 import routes.practice as practice_route
 from routes.practice import (
+    build_problem_archive,
     grade_problem_submission,
     normalize_generated_blank_answers,
     serialize_admin_problem_detail,
@@ -253,6 +255,20 @@ class PracticeValidationTests(unittest.TestCase):
         blank_variant = next(item for item in detail['variants'] if item['problem_type'] == 'secure_blank')
         self.assertEqual(line_variant['answers'], [{'filename': 'buffer.py', 'line': 2}])
         self.assertEqual(blank_variant['answers'][0]['answer'], 'BUFFER_SIZE')
+
+    def test_problem_archive_contains_both_types_and_answer_files(self):
+        archive = build_problem_archive(self.make_published_problem())
+
+        with zipfile.ZipFile(archive) as zip_file:
+            names = set(zip_file.namelist())
+            self.assertIn('type1_line_selection/buffer.py', names)
+            self.assertIn('type1_line_selection/hint.txt', names)
+            self.assertIn('type1_line_selection/answers.txt', names)
+            self.assertIn('type2_secure_blank/buffer.py', names)
+            self.assertIn('type2_secure_blank/hint.txt', names)
+            self.assertIn('type2_secure_blank/answers.txt', names)
+            answers = zip_file.read('type2_secure_blank/answers.txt').decode('utf-8-sig')
+            self.assertIn('BUFFER_SIZE', answers)
 
     def test_grades_complete_problem_submission(self):
         result = grade_problem_submission(self.make_published_problem(), [

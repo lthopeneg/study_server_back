@@ -1,7 +1,9 @@
 import json
+import io
 import re
+import zipfile
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
@@ -214,6 +216,45 @@ def append_problem_variants(problem_set, validated_variants):
         for file_data in variant_data['files']:
             variant.files.append(PracticeProblemFile(**file_data))
         problem_set.variants.append(variant)
+
+
+def build_problem_archive(problem_set):
+    archive = io.BytesIO()
+    folder_names = {
+        'line_selection': 'type1_line_selection',
+        'secure_blank': 'type2_secure_blank',
+    }
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for variant in sorted(problem_set.variants, key=lambda item: item.problem_type):
+            folder = folder_names.get(variant.problem_type)
+            if not folder:
+                continue
+            files = sorted(variant.files, key=lambda item: (item.display_order, getattr(item, 'id', 0) or 0))
+            for item in files:
+                zip_file.writestr(f'{folder}/{item.filename}', item.content.encode('utf-8'))
+
+            hint = files[0].hint if files else ''
+            zip_file.writestr(f'{folder}/hint.txt', (hint or '').encode('utf-8-sig'))
+            try:
+                answers = json.loads(variant.answers_json)
+            except (TypeError, json.JSONDecodeError):
+                answers = []
+            if variant.problem_type == 'line_selection':
+                grouped = {}
+                for answer in answers:
+                    grouped.setdefault(answer.get('filename', ''), []).append(answer.get('line'))
+                answer_lines = [
+                    f'{filename} - {", ".join(str(line) for line in lines)}번 라인'
+                    for filename, lines in grouped.items()
+                ]
+            else:
+                answer_lines = [
+                    f'{answer.get("filename", "")} - {answer.get("line")}번 라인 정답: {answer.get("answer", "")}'
+                    for answer in answers
+                ]
+            zip_file.writestr(f'{folder}/answers.txt', '\n'.join(answer_lines).encode('utf-8-sig'))
+    archive.seek(0)
+    return archive
 
 
 def _submission_variant_map(raw_variants):
@@ -534,6 +575,24 @@ def update_problem_set(problem_set_id):
         current_app.logger.exception('Practice problem set update failed')
         return jsonify({'status': 'error', 'message': '문제 세트 수정에 실패했습니다.'}), 500
     return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
+
+
+@practice_bp.route('/problems/<int:problem_set_id>/download', methods=['GET'])
+@jwt_required()
+def download_problem_set(problem_set_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    problem_set = db.session.get(PracticeProblemSet, problem_set_id)
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
+    archive = build_problem_archive(problem_set)
+    return send_file(
+        archive,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'practice_problem_{problem_set.id}.zip',
+    )
 
 
 @practice_bp.route('/problems/<int:problem_set_id>/status', methods=['PATCH'])
