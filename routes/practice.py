@@ -96,14 +96,23 @@ def validate_variant(raw_variant, expected_type):
         seen_answer_keys.add(answer_key)
 
         answer = {'filename': filename, 'line': line}
-        if expected_type == 'secure_blank':
-            answer_line = files[[item['filename'] for item in files].index(filename)]['content'].splitlines()[line - 1]
+        answer_line = files[[item['filename'] for item in files].index(filename)]['content'].splitlines()[line - 1]
+        if expected_type == 'line_selection':
+            stripped_line = answer_line.strip()
+            if not stripped_line or stripped_line.startswith(('#', '//')):
+                return None, '라인 선택형 정답은 빈 줄이나 주석이 아닌 실행 코드여야 합니다.'
+            answer['code'] = stripped_line
+        else:
             if len(BLANK_PATTERN.findall(answer_line)) != 1:
                 return None, '빈칸형 정답 라인에는 언더바 4개(____)가 필요합니다.'
             answer_text, error = validate_text(raw_answer.get('answer', ''), '빈칸 정답', MAX_ANSWER_LENGTH, required=True)
             if error:
                 return None, error
+            if '\n' in answer_text or '\r' in answer_text:
+                return None, '빈칸 정답에는 줄바꿈을 사용할 수 없습니다.'
             answer['answer'] = answer_text
+            answer['answer_kind'] = 'identifier' if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', answer_text) else 'expression'
+            answer['completed_line'] = BLANK_PATTERN.sub(answer_text, answer_line, count=1)
         answers.append(answer)
 
     if not answers:
@@ -397,6 +406,43 @@ def normalize_generated_blank_answers(raw_variant):
     return normalized
 
 
+def normalize_generated_line_answers(raw_variant):
+    if not isinstance(raw_variant, dict):
+        return raw_variant
+    raw_files = raw_variant.get('files')
+    raw_answers = raw_variant.get('answers')
+    if not isinstance(raw_files, list) or not isinstance(raw_answers, list):
+        return raw_variant
+
+    normalized = {
+        **raw_variant,
+        'files': [dict(item) if isinstance(item, dict) else item for item in raw_files],
+        'answers': [dict(item) if isinstance(item, dict) else item for item in raw_answers],
+    }
+    lines_by_file = {
+        item.get('filename'): item.get('content', '').splitlines()
+        for item in normalized['files']
+        if isinstance(item, dict) and isinstance(item.get('filename'), str) and isinstance(item.get('content'), str)
+    }
+    for answer in normalized['answers']:
+        if not isinstance(answer, dict):
+            continue
+        filename = answer.get('filename')
+        code = answer.get('code')
+        if not isinstance(code, str) or not code.strip() or '\n' in code or '\r' in code:
+            raise ValueError('라인 선택형 정답에는 실제 코드 한 줄(code)이 필요합니다.')
+        target = code.strip()
+        matches = [
+            line_number for line_number, line_text in enumerate(lines_by_file.get(filename, []), start=1)
+            if line_text.strip() == target
+        ]
+        if len(matches) != 1:
+            raise ValueError('라인 선택형 정답 코드는 파일 안에서 정확히 한 번만 일치해야 합니다.')
+        answer['line'] = matches[0]
+        answer['code'] = target
+    return normalized
+
+
 def validate_generated_variants(generated, minimum_files):
     raw_variants = generated.get('variants') if isinstance(generated, dict) else None
     if not isinstance(raw_variants, list):
@@ -411,7 +457,9 @@ def validate_generated_variants(generated, minimum_files):
     validated_variants = []
     for problem_type in ('line_selection', 'secure_blank'):
         raw_variant = variant_map[problem_type]
-        if problem_type == 'secure_blank':
+        if problem_type == 'line_selection':
+            raw_variant = normalize_generated_line_answers(raw_variant)
+        else:
             raw_variant = normalize_generated_blank_answers(raw_variant)
         variant, error = validate_variant(raw_variant, problem_type)
         if error:
@@ -420,6 +468,10 @@ def validate_generated_variants(generated, minimum_files):
             raise ValueError(f'AI가 {problem_type} 유형의 최소 파일 수를 충족하지 않았습니다.')
         if not variant['hint'].strip():
             raise ValueError(f'AI가 {problem_type} 유형의 힌트를 생성하지 않았습니다.')
+        if problem_type == 'secure_blank' and any(
+            answer.get('answer_kind') != 'identifier' for answer in variant['answers']
+        ):
+            raise ValueError('AI 빈칸 정답은 함수명, 변수명 또는 상수 같은 단일 식별자여야 합니다.')
         validated_variants.append({
             'problem_type': variant['problem_type'],
             'hint': variant['hint'],
