@@ -8,6 +8,7 @@ import routes.practice as practice_route
 from routes.practice import (
     grade_problem_submission,
     normalize_generated_blank_answers,
+    serialize_admin_problem_detail,
     serialize_public_problem_detail,
     serialize_problem_summary,
     validate_generated_variants,
@@ -244,6 +245,14 @@ class PracticeValidationTests(unittest.TestCase):
         self.assertEqual(detail['id'], 12)
         self.assertEqual(detail['variants'][0]['files'][0]['content'], 'packet = receive()\ncopy(packet)')
         self.assertNotIn('answers', detail['variants'][0])
+
+    def test_admin_detail_includes_saved_answers(self):
+        detail = serialize_admin_problem_detail(self.make_published_problem())
+
+        line_variant = next(item for item in detail['variants'] if item['problem_type'] == 'line_selection')
+        blank_variant = next(item for item in detail['variants'] if item['problem_type'] == 'secure_blank')
+        self.assertEqual(line_variant['answers'], [{'filename': 'buffer.py', 'line': 2}])
+        self.assertEqual(blank_variant['answers'][0]['answer'], 'BUFFER_SIZE')
 
     def test_grades_complete_problem_submission(self):
         result = grade_problem_submission(self.make_published_problem(), [

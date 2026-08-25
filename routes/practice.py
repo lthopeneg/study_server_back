@@ -142,6 +142,80 @@ def serialize_public_problem_detail(problem_set):
     }
 
 
+def serialize_admin_problem_detail(problem_set):
+    detail = serialize_public_problem_detail(problem_set)
+    variants_by_type = {item['problem_type']: item for item in detail['variants']}
+    for variant in problem_set.variants:
+        try:
+            answers = json.loads(variant.answers_json)
+        except (TypeError, json.JSONDecodeError):
+            answers = []
+        if variant.problem_type in variants_by_type:
+            variants_by_type[variant.problem_type]['answers'] = answers
+    return detail
+
+
+def validate_problem_set_payload(data):
+    title, error = validate_text(data.get('title', ''), '문제 제목', 255, required=True)
+    if error:
+        return None, error
+    scenario, error = validate_text(data.get('scenario', ''), '문제 설명', 20_000)
+    if error:
+        return None, error
+
+    language = data.get('language')
+    difficulty = data.get('difficulty')
+    major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
+    minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
+    if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
+        return None, '언어 또는 난이도가 올바르지 않습니다.'
+    if major_error or minor_error:
+        return None, major_error or minor_error
+
+    raw_variants = data.get('variants')
+    if not isinstance(raw_variants, list):
+        return None, '문제 유형 데이터가 필요합니다.'
+    variant_map = {
+        item.get('problem_type'): item
+        for item in raw_variants
+        if isinstance(item, dict) and item.get('problem_type') in REQUIRED_TYPES
+    }
+    if set(variant_map) != REQUIRED_TYPES or len(raw_variants) != len(REQUIRED_TYPES):
+        return None, '라인 선택형과 빈칸형이 각각 하나씩 필요합니다.'
+
+    validated_variants = []
+    for problem_type in ('line_selection', 'secure_blank'):
+        variant, variant_error = validate_variant(variant_map[problem_type], problem_type)
+        if variant_error:
+            return None, variant_error
+        validated_variants.append(variant)
+
+    creation_method = data.get('creation_method', 'manual')
+    if creation_method not in {'manual', 'ai'}:
+        return None, '출제 방식이 올바르지 않습니다.'
+    return {
+        'title': title,
+        'scenario': scenario,
+        'language': language,
+        'major_topic': major_topic,
+        'minor_topic': minor_topic,
+        'difficulty': difficulty,
+        'creation_method': creation_method,
+        'variants': validated_variants,
+    }, None
+
+
+def append_problem_variants(problem_set, validated_variants):
+    for variant_data in validated_variants:
+        variant = PracticeProblemVariant(
+            problem_type=variant_data['problem_type'],
+            answers_json=json.dumps(variant_data['answers'], ensure_ascii=False),
+        )
+        for file_data in variant_data['files']:
+            variant.files.append(PracticeProblemFile(**file_data))
+        problem_set.variants.append(variant)
+
+
 def _submission_variant_map(raw_variants):
     if not isinstance(raw_variants, list) or len(raw_variants) != len(REQUIRED_TYPES):
         raise ValueError('두 문제 유형의 답안을 모두 제출해주세요.')
@@ -422,6 +496,46 @@ def get_problem_sets():
     })
 
 
+@practice_bp.route('/problems/<int:problem_set_id>', methods=['GET'])
+@jwt_required()
+def get_problem_set_for_edit(problem_set_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    problem_set = db.session.get(PracticeProblemSet, problem_set_id)
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'data': serialize_admin_problem_detail(problem_set)})
+
+
+@practice_bp.route('/problems/<int:problem_set_id>', methods=['PUT'])
+@jwt_required()
+def update_problem_set(problem_set_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    problem_set = db.session.get(PracticeProblemSet, problem_set_id)
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
+
+    payload, error = validate_problem_set_payload(request.get_json(silent=True) or {})
+    if error:
+        return jsonify({'status': 'error', 'message': error}), 400
+
+    for field in ('title', 'scenario', 'language', 'major_topic', 'minor_topic', 'difficulty', 'creation_method'):
+        setattr(problem_set, field, payload[field])
+    try:
+        problem_set.variants.clear()
+        db.session.flush()
+        append_problem_variants(problem_set, payload['variants'])
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Practice problem set update failed')
+        return jsonify({'status': 'error', 'message': '문제 세트 수정에 실패했습니다.'}), 500
+    return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
+
+
 @practice_bp.route('/problems/<int:problem_set_id>/status', methods=['PATCH'])
 @jwt_required()
 def update_problem_status(problem_set_id):
@@ -456,64 +570,22 @@ def create_problem_set():
     if not admin:
         return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
 
-    data = request.get_json(silent=True) or {}
-    title, error = validate_text(data.get('title', ''), '문제 제목', 255, required=True)
+    payload, error = validate_problem_set_payload(request.get_json(silent=True) or {})
     if error:
         return jsonify({'status': 'error', 'message': error}), 400
-    scenario, error = validate_text(data.get('scenario', ''), '문제 설명', 20_000)
-    if error:
-        return jsonify({'status': 'error', 'message': error}), 400
-
-    language = data.get('language')
-    difficulty = data.get('difficulty')
-    major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
-    minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
-    if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
-        return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
-    if major_error or minor_error:
-        return jsonify({'status': 'error', 'message': major_error or minor_error}), 400
-
-    raw_variants = data.get('variants')
-    if not isinstance(raw_variants, list):
-        return jsonify({'status': 'error', 'message': '문제 유형 데이터가 필요합니다.'}), 400
-    variant_map = {
-        item.get('problem_type'): item
-        for item in raw_variants
-        if isinstance(item, dict) and item.get('problem_type') in REQUIRED_TYPES
-    }
-    if set(variant_map) != REQUIRED_TYPES or len(raw_variants) != len(REQUIRED_TYPES):
-        return jsonify({'status': 'error', 'message': '라인 선택형과 빈칸형이 각각 하나씩 필요합니다.'}), 400
-
-    validated_variants = []
-    for problem_type in ('line_selection', 'secure_blank'):
-        variant, variant_error = validate_variant(variant_map[problem_type], problem_type)
-        if variant_error:
-            return jsonify({'status': 'error', 'message': variant_error}), 400
-        validated_variants.append(variant)
-
-    creation_method = data.get('creation_method', 'manual')
-    if creation_method not in {'manual', 'ai'}:
-        return jsonify({'status': 'error', 'message': '출제 방식이 올바르지 않습니다.'}), 400
 
     problem_set = PracticeProblemSet(
-        title=title,
-        language=language,
-        major_topic=major_topic,
-        minor_topic=minor_topic,
-        difficulty=difficulty,
-        scenario=scenario,
-        creation_method=creation_method,
+        title=payload['title'],
+        language=payload['language'],
+        major_topic=payload['major_topic'],
+        minor_topic=payload['minor_topic'],
+        difficulty=payload['difficulty'],
+        scenario=payload['scenario'],
+        creation_method=payload['creation_method'],
         status='draft',
         created_by=admin.id,
     )
-    for variant_data in validated_variants:
-        variant = PracticeProblemVariant(
-            problem_type=variant_data['problem_type'],
-            answers_json=json.dumps(variant_data['answers'], ensure_ascii=False),
-        )
-        for file_data in variant_data['files']:
-            variant.files.append(PracticeProblemFile(**file_data))
-        problem_set.variants.append(variant)
+    append_problem_variants(problem_set, payload['variants'])
 
     try:
         db.session.add(problem_set)
