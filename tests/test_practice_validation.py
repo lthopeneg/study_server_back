@@ -6,7 +6,9 @@ from flask import Flask
 
 import routes.practice as practice_route
 from routes.practice import (
+    grade_problem_submission,
     normalize_generated_blank_answers,
+    serialize_public_problem_detail,
     serialize_problem_summary,
     validate_generated_variants,
     validate_variant,
@@ -202,6 +204,72 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertIn('____', normalized['files'][0]['content'])
         self.assertNotIn('________', normalized['files'][0]['content'])
+
+    def make_published_problem(self):
+        return SimpleNamespace(
+            id=12,
+            title='내부 제목',
+            language='Python',
+            major_topic='입력데이터 검증 및 표현',
+            minor_topic='메모리 버퍼 오버플로우',
+            difficulty='intermediate',
+            creation_method='ai',
+            status='published',
+            scenario='네트워크 패킷을 처리합니다.',
+            created_at=None,
+            updated_at=None,
+            variants=[
+                SimpleNamespace(
+                    problem_type='line_selection',
+                    answers_json='[{"filename":"buffer.py","line":2}]',
+                    files=[SimpleNamespace(
+                        id=1, filename='buffer.py', content='packet = receive()\ncopy(packet)',
+                        hint='입력 흐름을 확인하세요.', display_order=0,
+                    )],
+                ),
+                SimpleNamespace(
+                    problem_type='secure_blank',
+                    answers_json='[{"filename":"buffer.py","line":2,"answer":"BUFFER_SIZE"}]',
+                    files=[SimpleNamespace(
+                        id=2, filename='buffer.py', content='packet = receive()\nif len(packet) > ____:',
+                        hint='버퍼의 크기를 확인하세요.', display_order=0,
+                    )],
+                ),
+            ],
+        )
+
+    def test_public_detail_does_not_include_answers(self):
+        detail = serialize_public_problem_detail(self.make_published_problem())
+
+        self.assertEqual(detail['id'], 12)
+        self.assertEqual(detail['variants'][0]['files'][0]['content'], 'packet = receive()\ncopy(packet)')
+        self.assertNotIn('answers', detail['variants'][0])
+
+    def test_grades_complete_problem_submission(self):
+        result = grade_problem_submission(self.make_published_problem(), [
+            {
+                'problem_type': 'line_selection',
+                'answers': [{'filename': 'buffer.py', 'line': 2}],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'answers': [{'filename': 'buffer.py', 'line': 2, 'answer': ' BUFFER_SIZE '}],
+            },
+        ])
+
+        self.assertTrue(result['correct'])
+        self.assertTrue(all(item['correct'] for item in result['variants']))
+
+    def test_marks_wrong_answers_without_revealing_correct_answer(self):
+        result = grade_problem_submission(self.make_published_problem(), [
+            {'problem_type': 'line_selection', 'answers': [{'filename': 'buffer.py', 'line': 1}]},
+            {'problem_type': 'secure_blank', 'answers': [{'filename': 'buffer.py', 'line': 2, 'answer': 'packet'}]},
+        ])
+
+        self.assertFalse(result['correct'])
+        self.assertFalse(result['variants'][0]['correct'])
+        self.assertFalse(result['variants'][1]['answers'][0]['correct'])
+        self.assertNotIn('expected_answer', result['variants'][1]['answers'][0])
 
 
 if __name__ == '__main__':
