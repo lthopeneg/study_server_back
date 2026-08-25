@@ -71,7 +71,6 @@ jobs:
               -e DB_NAME=${{ secrets.DB_NAME }} \
               -e JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }} \
               -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
-              -e OPENAI_PRACTICE_MODEL=${{ secrets.OPENAI_PRACTICE_MODEL }} \
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \
               --name study-back-app $IMAGE_URL

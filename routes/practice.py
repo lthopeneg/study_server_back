@@ -14,6 +14,7 @@ practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
 ALLOWED_LANGUAGES = {'Python', 'C#'}
 ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
+ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
 MAX_FILES_PER_VARIANT = 20
 MAX_CODE_LENGTH = 100_000
@@ -165,6 +166,7 @@ def generate_problem_set():
     extra_request, extra_error = validate_text(data.get('extra_request', ''), '추가 요청사항', MAX_EXTRA_REQUEST_LENGTH)
     minimum_files = data.get('minimum_files')
     reference_scope = data.get('reference_scope', 'latest')
+    model = data.get('model', 'gpt-5.6-luna')
 
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
@@ -174,6 +176,8 @@ def generate_problem_set():
         return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_FILES_PER_VARIANT}여야 합니다.'}), 400
     if reference_scope not in {'latest', 'all'}:
         return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
+    if model not in ALLOWED_AI_MODELS:
+        return jsonify({'status': 'error', 'message': '지원하지 않는 AI 모델입니다.'}), 400
 
     try:
         generated = generate_problem_draft(
@@ -185,6 +189,7 @@ def generate_problem_set():
             scenario=scenario,
             extra_request=extra_request,
             reference_scope=reference_scope,
+            model=model,
         )
         validated_variants = validate_generated_variants(generated, minimum_files)
     except ValueError as error:

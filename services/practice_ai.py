@@ -119,19 +119,19 @@ def generate_problem_draft(**conditions):
     context = collect_research_context(
         conditions['major_topic'], conditions['minor_topic'], conditions['reference_scope'],
     )
-    prompt = _build_prompt(research_context=context, **{key: value for key, value in conditions.items() if key != 'reference_scope'})
-    client = OpenAI(api_key=api_key, timeout=45.0)
-    response = client.chat.completions.create(
-        model=os.getenv('OPENAI_PRACTICE_MODEL') or 'gpt-4o-mini',
-        messages=[
-            {'role': 'system', 'content': '사용자가 지정한 JSON 형식만 반환하는 시큐어코딩 문제 출제자입니다.'},
-            {'role': 'user', 'content': prompt},
-        ],
-        response_format={'type': 'json_object'},
-        temperature=0.3,
-        max_completion_tokens=16_000,
+    prompt = _build_prompt(
+        research_context=context,
+        **{key: value for key, value in conditions.items() if key not in {'reference_scope', 'model'}},
     )
-    content = response.choices[0].message.content
+    client = OpenAI(api_key=api_key, timeout=45.0)
+    response = client.responses.create(
+        model=conditions['model'],
+        instructions='사용자가 지정한 JSON 형식만 반환하는 시큐어코딩 문제 출제자입니다.',
+        input=prompt,
+        text={'format': {'type': 'json_object'}},
+        max_output_tokens=16_000,
+    )
+    content = response.output_text
     if not content:
         raise RuntimeError('AI가 빈 응답을 반환했습니다.')
     try:
