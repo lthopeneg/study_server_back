@@ -16,6 +16,7 @@ ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
 ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
+BLANK_PATTERN = re.compile(r'_{4,}')
 MAX_FILES_PER_VARIANT = 20
 MAX_CODE_LENGTH = 100_000
 MAX_HINT_LENGTH = 5_000
@@ -93,7 +94,8 @@ def validate_variant(raw_variant, expected_type):
 
         answer = {'filename': filename, 'line': line}
         if expected_type == 'secure_blank':
-            if '____' not in files[[item['filename'] for item in files].index(filename)]['content'].splitlines()[line - 1]:
+            answer_line = files[[item['filename'] for item in files].index(filename)]['content'].splitlines()[line - 1]
+            if len(BLANK_PATTERN.findall(answer_line)) != 1:
                 return None, '빈칸형 정답 라인에는 언더바 4개(____)가 필요합니다.'
             answer_text, error = validate_text(raw_answer.get('answer', ''), '빈칸 정답', MAX_ANSWER_LENGTH, required=True)
             if error:
@@ -120,6 +122,54 @@ def serialize_problem_summary(problem_set):
     }
 
 
+def normalize_generated_blank_answers(raw_variant):
+    if not isinstance(raw_variant, dict):
+        return raw_variant
+    raw_files = raw_variant.get('files')
+    raw_answers = raw_variant.get('answers')
+    if not isinstance(raw_files, list) or not isinstance(raw_answers, list):
+        return raw_variant
+
+    normalized = {
+        **raw_variant,
+        'files': [dict(item) if isinstance(item, dict) else item for item in raw_files],
+        'answers': [dict(item) if isinstance(item, dict) else item for item in raw_answers],
+    }
+    blank_lines_by_file = {}
+    for raw_file in normalized['files']:
+        if not isinstance(raw_file, dict) or not isinstance(raw_file.get('filename'), str):
+            continue
+        content = raw_file.get('content')
+        if not isinstance(content, str):
+            continue
+        normalized_lines = []
+        blank_lines = []
+        for line_number, line_text in enumerate(content.splitlines(), start=1):
+            matches = BLANK_PATTERN.findall(line_text)
+            if len(matches) == 1:
+                line_text = BLANK_PATTERN.sub('____', line_text)
+                blank_lines.append(line_number)
+            normalized_lines.append(line_text)
+        raw_file['content'] = '\n'.join(normalized_lines)
+        blank_lines_by_file[raw_file['filename']] = blank_lines
+
+    for filename, blank_lines in blank_lines_by_file.items():
+        answer_indexes = [
+            index for index, answer in enumerate(normalized['answers'])
+            if isinstance(answer, dict) and answer.get('filename') == filename
+        ]
+        if not blank_lines or len(answer_indexes) != len(blank_lines):
+            continue
+        answer_indexes.sort(key=lambda index: (
+            normalized['answers'][index].get('line')
+            if isinstance(normalized['answers'][index].get('line'), int)
+            else float('inf')
+        ))
+        for answer_index, actual_line in zip(answer_indexes, blank_lines):
+            normalized['answers'][answer_index]['line'] = actual_line
+    return normalized
+
+
 def validate_generated_variants(generated, minimum_files):
     raw_variants = generated.get('variants') if isinstance(generated, dict) else None
     if not isinstance(raw_variants, list):
@@ -133,7 +183,10 @@ def validate_generated_variants(generated, minimum_files):
 
     validated_variants = []
     for problem_type in ('line_selection', 'secure_blank'):
-        variant, error = validate_variant(variant_map[problem_type], problem_type)
+        raw_variant = variant_map[problem_type]
+        if problem_type == 'secure_blank':
+            raw_variant = normalize_generated_blank_answers(raw_variant)
+        variant, error = validate_variant(raw_variant, problem_type)
         if error:
             raise ValueError(error)
         if len(variant['files']) < minimum_files:
