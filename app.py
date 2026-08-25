@@ -12,6 +12,7 @@ from routes.practice import practice_bp
 
 # 테이블 생성을 위해 모델 임포트 (app_context보다 위에서 호출 필수)
 import models 
+from schema_migrations import apply_schema_migrations
 
 load_dotenv()
 app = Flask(__name__)
@@ -50,6 +51,7 @@ limiter.init_app(app)
 # 서버 켜질 때 테이블 존재 여부 확인 및 생성
 with app.app_context():
     db.create_all()
+    apply_schema_migrations()
 
 # --- 3. 라우터 (Blueprint) 등록 ---
 app.register_blueprint(auth_bp)

@@ -58,12 +58,27 @@ def collect_research_context(major_topic, minor_topic, scope):
     return '\n\n'.join(sections)
 
 
-def _build_prompt(*, language, major_topic, minor_topic, difficulty, minimum_files, scenario, extra_request, research_context):
+def _build_prompt(*, language, runtime_platform, project_type, major_topic, minor_topic, difficulty, minimum_files, scenario, extra_request, research_context):
     extension = '.py' if language == 'Python' else '.cs'
+    platform_condition = ''
+    if language == 'C#':
+        platform_labels = {'dotnet': '.NET', 'dotnet_framework': '.NET Framework'}
+        project_labels = {
+            'auto': '자동 선택',
+            'console': 'Console',
+            'aspnet_core_mvc': 'ASP.NET Core MVC',
+            'aspnet_core_web_api': 'ASP.NET Core Web API',
+            'aspnet_mvc5': 'ASP.NET MVC 5',
+            'aspnet_web_api2': 'ASP.NET Web API 2',
+        }
+        platform_condition = f'''\n- 실행 환경: {platform_labels[runtime_platform]}
+- 프로젝트 유형: {project_labels[project_type]}
+- 선택한 실행 환경과 프로젝트 유형에서 사용할 수 있는 API와 프로젝트 구조만 사용합니다.'''
     return f'''당신은 시큐어코딩 실습 문제 출제자입니다.
 
 [출제 조건]
 - 언어: {language}
+{platform_condition}
 - 대주제: {major_topic}
 - 소주제: {minor_topic}
 - 난이도: {difficulty}
