@@ -14,6 +14,7 @@ from routes.practice import (
     serialize_admin_problem_detail,
     serialize_public_problem_detail,
     serialize_problem_summary,
+    validate_csharp_environment,
     validate_generated_variants,
     validate_variant,
 )
@@ -22,6 +23,20 @@ from routes.practice import (
 class PracticeValidationTests(unittest.TestCase):
     def setUp(self):
         self.app = Flask(__name__)
+
+    def test_rejects_framework_request_with_modern_dotnet_selection(self):
+        error = validate_csharp_environment(
+            'C#', 'dotnet', 'console', 'C# .NET Framework 환경으로 작성합니다.',
+        )
+
+        self.assertIn('.NET Framework', error)
+
+    def test_accepts_matching_framework_selection(self):
+        error = validate_csharp_environment(
+            'C#', 'dotnet_framework', 'console', 'ASP.NET Core 전용 API는 사용하지 않습니다.',
+        )
+
+        self.assertIsNone(error)
 
     def test_accepts_line_selection_files_and_answers(self):
         variant, error = validate_variant(
