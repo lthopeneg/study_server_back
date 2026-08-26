@@ -16,21 +16,37 @@ practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
 ALLOWED_LANGUAGES = {'Python', 'C#'}
 ALLOWED_RUNTIME_PLATFORMS = {'dotnet', 'dotnet_framework'}
 ALLOWED_PROJECT_TYPES = {
-    'dotnet': {'auto', 'console', 'aspnet_core_mvc', 'aspnet_core_web_api'},
-    'dotnet_framework': {'auto', 'console', 'aspnet_mvc5', 'aspnet_web_api2'},
+    'dotnet': {'console', 'aspnet_core_mvc', 'aspnet_core_web_api'},
+    'dotnet_framework': {'console', 'aspnet_mvc5', 'aspnet_web_api2'},
 }
 ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
 ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
 BLANK_PATTERN = re.compile(r'_{4,}')
-MAX_FILES_PER_VARIANT = 20
+MAX_SOURCE_FILES_PER_VARIANT = 20
+MAX_FILES_PER_VARIANT = 21
 MAX_CODE_LENGTH = 100_000
 MAX_HINT_LENGTH = 5_000
 MAX_ANSWER_LENGTH = 20_000
 MAX_SCENARIO_LENGTH = 5_000
 MAX_EXTRA_REQUEST_LENGTH = 5_000
 MAX_SUBMITTED_ANSWERS = 500
+
+
+def validate_csharp_environment(language, runtime_platform, project_type, request_text=''):
+    if language != 'C#':
+        return None
+    if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
+        return 'C# 실행 환경을 선택해주세요.'
+    if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
+        return '선택한 실행 환경에서 지원하는 프로젝트 유형을 선택해주세요.'
+
+    normalized_request = request_text.casefold() if isinstance(request_text, str) else ''
+    requests_framework = '.net framework' in normalized_request or '닷넷 프레임워크' in normalized_request
+    if requests_framework and runtime_platform != 'dotnet_framework':
+        return '시나리오에는 .NET Framework가 지정되어 있지만 실행 환경은 .NET으로 선택되었습니다.'
+    return None
 
 
 def get_admin_user(login_id):
@@ -189,12 +205,10 @@ def validate_problem_set_payload(data):
     minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return None, '언어 또는 난이도가 올바르지 않습니다.'
-    if language == 'C#':
-        if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
-            return None, 'C# 실행 환경이 올바르지 않습니다.'
-        if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
-            return None, '선택한 실행 환경에서 지원하지 않는 프로젝트 유형입니다.'
-    else:
+    environment_error = validate_csharp_environment(language, runtime_platform, project_type, scenario)
+    if environment_error:
+        return None, environment_error
+    if language != 'C#':
         runtime_platform = None
         project_type = None
     if major_error or minor_error:
@@ -478,7 +492,7 @@ def normalize_generated_line_answers(raw_variant):
     return normalized
 
 
-def validate_generated_variants(generated, minimum_files):
+def validate_generated_variants(generated, minimum_files, language='Python'):
     raw_variants = generated.get('variants') if isinstance(generated, dict) else None
     if not isinstance(raw_variants, list):
         raise ValueError('AI가 문제 유형 데이터를 반환하지 않았습니다.')
@@ -499,8 +513,16 @@ def validate_generated_variants(generated, minimum_files):
         variant, error = validate_variant(raw_variant, problem_type)
         if error:
             raise ValueError(error)
-        if len(variant['files']) < minimum_files:
+        source_extension = '.py' if language == 'Python' else '.cs'
+        source_file_count = sum(
+            1 for item in variant['files'] if item['filename'].lower().endswith(source_extension)
+        )
+        if source_file_count < minimum_files:
             raise ValueError(f'AI가 {problem_type} 유형의 최소 파일 수를 충족하지 않았습니다.')
+        if language == 'C#' and not any(
+            item['filename'].lower().endswith('.csproj') for item in variant['files']
+        ):
+            raise ValueError(f'AI가 {problem_type} 유형의 C# 프로젝트 파일(.csproj)을 생성하지 않았습니다.')
         if not variant['hint'].strip():
             raise ValueError(f'AI가 {problem_type} 유형의 힌트를 생성하지 않았습니다.')
         if problem_type == 'secure_blank' and any(
@@ -539,18 +561,18 @@ def generate_problem_set():
 
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
-    if language == 'C#':
-        if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
-            return jsonify({'status': 'error', 'message': 'C# 실행 환경이 올바르지 않습니다.'}), 400
-        if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
-            return jsonify({'status': 'error', 'message': '선택한 실행 환경에서 지원하지 않는 프로젝트 유형입니다.'}), 400
-    else:
+    environment_error = validate_csharp_environment(
+        language, runtime_platform, project_type, f'{scenario}\n{extra_request}',
+    )
+    if environment_error:
+        return jsonify({'status': 'error', 'message': environment_error}), 400
+    if language != 'C#':
         runtime_platform = None
         project_type = None
     if major_error or minor_error or scenario_error or extra_error:
         return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
-    if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_FILES_PER_VARIANT:
-        return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_FILES_PER_VARIANT}여야 합니다.'}), 400
+    if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_SOURCE_FILES_PER_VARIANT:
+        return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_SOURCE_FILES_PER_VARIANT}여야 합니다.'}), 400
     if reference_scope not in {'latest', 'all'}:
         return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
     if model not in ALLOWED_AI_MODELS:
@@ -570,7 +592,7 @@ def generate_problem_set():
             reference_scope=reference_scope,
             model=model,
         )
-        validated_variants = validate_generated_variants(generated, minimum_files)
+        validated_variants = validate_generated_variants(generated, minimum_files, language)
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
         return jsonify({'status': 'error', 'message': f'AI 생성 결과 검증에 실패했습니다: {error}'}), 422

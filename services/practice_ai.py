@@ -64,16 +64,23 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
     if language == 'C#':
         platform_labels = {'dotnet': '.NET', 'dotnet_framework': '.NET Framework'}
         project_labels = {
-            'auto': '자동 선택',
             'console': 'Console',
             'aspnet_core_mvc': 'ASP.NET Core MVC',
             'aspnet_core_web_api': 'ASP.NET Core Web API',
             'aspnet_mvc5': 'ASP.NET MVC 5',
             'aspnet_web_api2': 'ASP.NET Web API 2',
         }
+        project_file_rule = (
+            '- 기존 형식의 .csproj를 사용하고 현대 .NET용 SDK 스타일 또는 ASP.NET Core 전용 구성을 사용하지 않습니다.'
+            if runtime_platform == 'dotnet_framework'
+            else '- 현대 .NET용 SDK 스타일 .csproj를 사용하고 .NET Framework 전용 구성을 사용하지 않습니다.'
+        )
         platform_condition = f'''\n- 실행 환경: {platform_labels[runtime_platform]}
 - 프로젝트 유형: {project_labels[project_type]}
-- 선택한 실행 환경과 프로젝트 유형에서 사용할 수 있는 API와 프로젝트 구조만 사용합니다.'''
+- 선택한 실행 환경과 프로젝트 유형에서 사용할 수 있는 API와 프로젝트 구조만 사용합니다.
+- 구조화된 실행 환경과 프로젝트 유형은 관리자 시나리오 및 추가 요청보다 우선합니다.
+- 각 문제 유형에 선택한 실행 환경에서 빌드 가능한 프로젝트 정의 파일(.csproj)을 하나씩 포함합니다.
+{project_file_rule}'''
     return f'''당신은 시큐어코딩 실습 문제 출제자입니다.
 
 [출제 조건]
