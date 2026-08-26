@@ -215,79 +215,91 @@ def fetch_boannews_entries(start_date, end_date):
     reference_date = end_date + timedelta(days=1)
     target_date = start_date
 
-    while target_date <= end_date:
-        date_text = target_date.isoformat()
-        response = requests.get(
-            BOANNEWS_LIST_URL,
-            params={
-                "view_type": "sm",
-                "sc_sdate": date_text,
-                "sc_edate": date_text,
-                "_": int(datetime.now().timestamp()),
-            },
-            headers=BOANNEWS_REQUEST_HEADERS,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, "html.parser")
-        items = soup.select("#section-list li.altlist-webzine-item")
-        total_element = soup.select_one("h1 strong")
-        if not total_element:
-            raise RuntimeError(
-                f"보안뉴스 목록 구조를 확인할 수 없습니다. (date={date_text})"
-            )
-
-        total_text = re.sub(r"\D", "", total_element.get_text())
-        total_articles = int(total_text or 0)
-        if total_articles > 0 and not items:
-            raise RuntimeError(
-                f"보안뉴스 기사 항목을 확인할 수 없습니다. (date={date_text})"
-            )
-
-        normalized_items = [
-            normalize_boannews_item(item, reference_date) for item in items
-        ]
-        page_count = (total_articles + 19) // 20
-        if page_count > BOANNEWS_MAX_PAGES:
-            raise RuntimeError(
-                f"보안뉴스 {date_text} 기사 수가 안전한 조회 한도를 초과했습니다."
-            )
-
-        for page in range(2, page_count + 1):
-            response = requests.get(
-                BOANNEWS_PAGING_URL,
+    with requests.Session() as session:
+        while target_date <= end_date:
+            date_text = target_date.isoformat()
+            response = session.get(
+                BOANNEWS_LIST_URL,
                 params={
-                    "total": total_articles,
-                    "list_per_page": 20,
-                    "page_per_page": 10,
-                    "page": page,
                     "view_type": "sm",
                     "sc_sdate": date_text,
                     "sc_edate": date_text,
+                    "_": int(datetime.now().timestamp()),
                 },
                 headers=BOANNEWS_REQUEST_HEADERS,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            payload = response.json()
-            items = payload.get("data") if payload.get("result") == "success" else None
-            if not isinstance(items, list) or not items:
+            list_referer = response.url
+            soup = BeautifulSoup(response.content, "html.parser")
+            items = soup.select("#section-list li.altlist-webzine-item")
+            total_element = soup.select_one("h1 strong")
+            if not total_element:
                 raise RuntimeError(
-                    f"보안뉴스 기사 목록을 확인할 수 없습니다. "
-                    f"(date={date_text}, page={page})"
+                    f"보안뉴스 목록 구조를 확인할 수 없습니다. (date={date_text})"
                 )
-            normalized_items.extend(
-                normalize_boannews_json_item(item, reference_date) for item in items
-            )
 
-        for normalized in normalized_items:
-            if not normalized:
-                continue
-            title, link, pub_date, published_date = normalized
-            if published_date == target_date:
-                entries.append((title, link, pub_date))
+            total_text = re.sub(r"\D", "", total_element.get_text())
+            total_articles = int(total_text or 0)
+            if total_articles > 0 and not items:
+                raise RuntimeError(
+                    f"보안뉴스 기사 항목을 확인할 수 없습니다. (date={date_text})"
+                )
 
-        target_date += timedelta(days=1)
+            normalized_items = [
+                normalize_boannews_item(item, reference_date) for item in items
+            ]
+            page_count = (total_articles + 19) // 20
+            if page_count > BOANNEWS_MAX_PAGES:
+                raise RuntimeError(
+                    f"보안뉴스 {date_text} 기사 수가 안전한 조회 한도를 초과했습니다."
+                )
+
+            for page in range(2, page_count + 1):
+                response = session.get(
+                    BOANNEWS_PAGING_URL,
+                    params={
+                        "total": total_articles,
+                        "list_per_page": 20,
+                        "page_per_page": 10,
+                        "page": page,
+                        "view_type": "sm",
+                        "sc_sdate": date_text,
+                        "sc_edate": date_text,
+                    },
+                    headers={**BOANNEWS_REQUEST_HEADERS, "Referer": list_referer},
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                items = (
+                    payload.get("data")
+                    if isinstance(payload, dict) and payload.get("result") == "success"
+                    else None
+                )
+                if not isinstance(items, list) or not items:
+                    server_message = (
+                        str(payload.get("msg") or "").strip()
+                        if isinstance(payload, dict)
+                        else ""
+                    )
+                    message_suffix = f", message={server_message}" if server_message else ""
+                    raise RuntimeError(
+                        f"보안뉴스 기사 목록을 확인할 수 없습니다. "
+                        f"(date={date_text}, page={page}{message_suffix})"
+                    )
+                normalized_items.extend(
+                    normalize_boannews_json_item(item, reference_date) for item in items
+                )
+
+            for normalized in normalized_items:
+                if not normalized:
+                    continue
+                title, link, pub_date, published_date = normalized
+                if published_date == target_date:
+                    entries.append((title, link, pub_date))
+
+            target_date += timedelta(days=1)
     return entries
 
 

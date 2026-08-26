@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import crawl_news
 
@@ -77,13 +77,21 @@ class CrawlNewsTests(unittest.TestCase):
 
         self.assertEqual(start_date, date(2026, 8, 17))
 
-    @patch("crawl_news.requests.get")
-    def test_boannews_list_collects_only_target_dates(self, mock_get):
-        first_response = Mock(content=make_list_html([(1, "누락 보충 기사", "08-22 10:00")]))
+    @patch("crawl_news.requests.Session")
+    def test_boannews_list_collects_only_target_dates(self, session_class):
+        session = MagicMock()
+        session_class.return_value.__enter__.return_value = session
+        first_response = Mock(
+            content=make_list_html([(1, "누락 보충 기사", "08-22 10:00")]),
+            url="https://www.boannews.com/news/articleList.html?sc_sdate=2026-08-22",
+        )
         first_response.raise_for_status.return_value = None
-        second_response = Mock(content=make_list_html([(2, "전날 기사", "08-23 18:00")]))
+        second_response = Mock(
+            content=make_list_html([(2, "전날 기사", "08-23 18:00")]),
+            url="https://www.boannews.com/news/articleList.html?sc_sdate=2026-08-23",
+        )
         second_response.raise_for_status.return_value = None
-        mock_get.side_effect = [first_response, second_response]
+        session.get.side_effect = [first_response, second_response]
 
         entries = crawl_news.fetch_boannews_entries(
             date(2026, 8, 22), date(2026, 8, 23)
@@ -91,7 +99,52 @@ class CrawlNewsTests(unittest.TestCase):
 
         self.assertEqual([entry[0] for entry in entries], ["누락 보충 기사", "전날 기사"])
         self.assertNotIn("저장하면 안 되는 목록 요약문", repr(entries))
-        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(session.get.call_count, 2)
+
+    @patch("crawl_news.requests.Session")
+    def test_boannews_paging_uses_list_referer(self, session_class):
+        session = MagicMock()
+        session_class.return_value.__enter__.return_value = session
+        list_url = "https://www.boannews.com/news/articleList.html?sc_sdate=2026-08-24"
+        first_response = Mock(
+            content=make_list_html([(1, "첫 페이지 기사", "08-24 10:00")], total=26),
+            url=list_url,
+        )
+        first_response.raise_for_status.return_value = None
+        paging_response = Mock()
+        paging_response.raise_for_status.return_value = None
+        paging_response.json.return_value = {
+            "result": "success",
+            "msg": "",
+            "data": [{
+                "idxno": "2", "title": "%EC%B6%94%EA%B0%80+%EA%B8%B0%EC%82%AC",
+                "viewDate": "08-24", "viewTime": "11:00",
+            }],
+        }
+        session.get.side_effect = [first_response, paging_response]
+
+        entries = crawl_news.fetch_boannews_entries(date(2026, 8, 24), date(2026, 8, 24))
+
+        self.assertEqual([entry[0] for entry in entries], ["첫 페이지 기사", "추가 기사"])
+        paging_headers = session.get.call_args_list[1].kwargs["headers"]
+        self.assertEqual(paging_headers["Referer"], list_url)
+
+    @patch("crawl_news.requests.Session")
+    def test_boannews_paging_error_includes_server_message(self, session_class):
+        session = MagicMock()
+        session_class.return_value.__enter__.return_value = session
+        first_response = Mock(
+            content=make_list_html([(1, "첫 페이지 기사", "08-24 10:00")], total=26),
+            url="https://www.boannews.com/news/articleList.html?sc_sdate=2026-08-24",
+        )
+        first_response.raise_for_status.return_value = None
+        paging_response = Mock()
+        paging_response.raise_for_status.return_value = None
+        paging_response.json.return_value = {"result": "error", "msg": "정상적인 접근이 아닙니다."}
+        session.get.side_effect = [first_response, paging_response]
+
+        with self.assertRaisesRegex(RuntimeError, "정상적인 접근이 아닙니다"):
+            crawl_news.fetch_boannews_entries(date(2026, 8, 24), date(2026, 8, 24))
 
     def test_list_date_handles_year_boundary(self):
         parsed = crawl_news.parse_boannews_list_date("12-31 23:50", date(2027, 1, 1))
