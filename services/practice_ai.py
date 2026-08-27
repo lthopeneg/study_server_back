@@ -69,17 +69,33 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
             'aspnet_core_web_api': 'ASP.NET Core Web API',
             'aspnet_mvc5': 'ASP.NET MVC 5',
             'aspnet_web_api2': 'ASP.NET Web API 2',
+            'auto': '시나리오 기반 자동 선택',
         }
         project_file_rule = (
             '- 기존 형식의 .csproj를 사용하고 현대 .NET용 SDK 스타일 또는 ASP.NET Core 전용 구성을 사용하지 않습니다.'
             if runtime_platform == 'dotnet_framework'
             else '- 현대 .NET용 SDK 스타일 .csproj를 사용하고 .NET Framework 전용 구성을 사용하지 않습니다.'
         )
+        auto_project_rule = (
+            '''
+- 시나리오가 브라우저 화면, View, 폼 제출 중심이면 ASP.NET MVC 5(aspnet_mvc5)를 선택합니다.
+- 시나리오가 JSON 요청·응답, REST API, 외부 클라이언트 연동 중심이면 ASP.NET Web API 2(aspnet_web_api2)를 선택합니다.
+- 판단이 모호하면 ASP.NET MVC 5를 선택하고, 두 유형 모두 동일한 프로젝트 유형으로 구성합니다.
+- 최종 선택값을 JSON 최상위 project_type에 aspnet_mvc5 또는 aspnet_web_api2로 반환합니다.'''
+            if project_type == 'auto'
+            else f'\n- JSON 최상위 project_type에 `{project_type}`을 반환합니다.'
+        )
+        project_priority_rule = (
+            '- 프로젝트 유형 자동 선택에서는 관리자 시나리오를 우선 판단 기준으로 사용합니다.'
+            if project_type == 'auto'
+            else '- 구조화된 실행 환경과 프로젝트 유형은 관리자 시나리오 및 추가 요청보다 우선합니다.'
+        )
         platform_condition = f'''\n- 실행 환경: {platform_labels[runtime_platform]}
 - 프로젝트 유형: {project_labels[project_type]}
 - 선택한 실행 환경과 프로젝트 유형에서 사용할 수 있는 API와 프로젝트 구조만 사용합니다.
-- 구조화된 실행 환경과 프로젝트 유형은 관리자 시나리오 및 추가 요청보다 우선합니다.
+{project_priority_rule}
 - 각 문제 유형에 선택한 실행 환경에서 빌드 가능한 프로젝트 정의 파일(.csproj)을 하나씩 포함합니다.
+{auto_project_rule}
 {project_file_rule}'''
     return f'''당신은 시큐어코딩 실습 문제 출제자입니다.
 
@@ -158,6 +174,7 @@ secure_blank:
 
 [JSON 형식]
 {{
+  "project_type": {json.dumps('aspnet_mvc5' if language == 'C#' and project_type == 'auto' else project_type if language == 'C#' else None)},
   "variants": [
     {{"problem_type":"line_selection","hint":"Source/Validation Failure/Sink 형식의 힌트","files":[{{"filename":"app{extension}","content":"전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1,"code":"정답 라인의 실제 코드","role":"source"}}]}},
     {{"problem_type":"secure_blank","hint":"서버가 빈칸별로 조립","files":[{{"filename":"app{extension}","content":"____ 포함 전체 코드"}}],"answers":[{{"filename":"app{extension}","line":1,"answer":"단일_식별자","hint":"정답을 직접 노출하지 않는 빈칸별 설명"}}]}}

@@ -38,12 +38,13 @@ MAX_SUBMITTED_ANSWERS = 500
 MAX_BULK_DELETE_PROBLEMS = 100
 
 
-def validate_csharp_environment(language, runtime_platform, project_type, request_text=''):
+def validate_csharp_environment(language, runtime_platform, project_type, request_text='', allow_auto=False):
     if language != 'C#':
         return None
     if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
         return 'C# 실행 환경을 선택해주세요.'
-    if project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
+    auto_allowed = allow_auto and runtime_platform == 'dotnet_framework' and project_type == 'auto'
+    if not auto_allowed and project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
         return '선택한 실행 환경에서 지원하는 프로젝트 유형을 선택해주세요.'
 
     normalized_request = request_text.casefold() if isinstance(request_text, str) else ''
@@ -51,6 +52,34 @@ def validate_csharp_environment(language, runtime_platform, project_type, reques
     if requests_framework and runtime_platform != 'dotnet_framework':
         return '시나리오에는 .NET Framework가 지정되어 있지만 실행 환경은 .NET으로 선택되었습니다.'
     return None
+
+
+def resolve_generated_project_type(generated, language, runtime_platform, requested_project_type):
+    if language != 'C#':
+        return None
+    if requested_project_type != 'auto':
+        return requested_project_type
+    generated_project_type = generated.get('project_type') if isinstance(generated, dict) else None
+    allowed_auto_types = {'aspnet_mvc5', 'aspnet_web_api2'}
+    if runtime_platform != 'dotnet_framework' or generated_project_type not in allowed_auto_types:
+        raise ValueError('AI가 .NET Framework 프로젝트 유형을 올바르게 선택하지 않았습니다.')
+    return generated_project_type
+
+
+def validate_generated_csharp_project_type(variants, project_type):
+    markers = {
+        'aspnet_mvc5': (r'\bSystem\.Web\.Mvc\b|:\s*Controller\b', r'\bSystem\.Web\.Http\b|:\s*ApiController\b'),
+        'aspnet_web_api2': (r'\bSystem\.Web\.Http\b|:\s*ApiController\b', r'\bSystem\.Web\.Mvc\b|:\s*Controller\b'),
+    }
+    if project_type not in markers:
+        return
+    required_pattern, conflicting_pattern = markers[project_type]
+    for variant in variants:
+        source = '\n'.join(file['content'] for file in variant['files'] if file['filename'].lower().endswith('.cs'))
+        if not re.search(required_pattern, source):
+            raise ValueError('AI 생성 코드가 선택한 .NET Framework 프로젝트 유형의 구조를 포함하지 않습니다.')
+        if re.search(conflicting_pattern, source):
+            raise ValueError('AI 생성 코드에 서로 다른 .NET Framework 웹 프로젝트 유형이 혼합되어 있습니다.')
 
 
 def get_admin_user(login_id):
@@ -709,7 +738,7 @@ def generate_problem_set():
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
     environment_error = validate_csharp_environment(
-        language, runtime_platform, project_type, f'{scenario}\n{extra_request}',
+        language, runtime_platform, project_type, f'{scenario}\n{extra_request}', allow_auto=True,
     )
     if environment_error:
         return jsonify({'status': 'error', 'message': environment_error}), 400
@@ -742,7 +771,12 @@ def generate_problem_set():
             reference_scope=reference_scope,
             model=model,
         )
+        resolved_project_type = resolve_generated_project_type(
+            generated, language, runtime_platform, project_type,
+        )
         validated_variants = validate_generated_variants(generated, minimum_files, language)
+        if language == 'C#':
+            validate_generated_csharp_project_type(validated_variants, resolved_project_type)
         warnings = build_generation_warnings(validated_variants, target_blank_count)
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
@@ -751,7 +785,11 @@ def generate_problem_set():
         current_app.logger.exception('AI practice problem generation failed')
         return jsonify({'status': 'error', 'message': 'AI 문제 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502
 
-    return jsonify({'status': 'success', 'data': {'variants': validated_variants, 'warnings': warnings}})
+    return jsonify({'status': 'success', 'data': {
+        'variants': validated_variants,
+        'warnings': warnings,
+        'project_type': resolved_project_type,
+    }})
 
 
 @practice_bp.route('/public/problems', methods=['GET'])

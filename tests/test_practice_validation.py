@@ -13,6 +13,7 @@ from routes.practice import (
     grade_problem_submission,
     normalize_generated_blank_answers,
     normalize_generated_line_answers,
+    resolve_generated_project_type,
     serialize_admin_problem_detail,
     serialize_public_problem_detail,
     serialize_problem_summary,
@@ -20,6 +21,7 @@ from routes.practice import (
     validate_delete_problem_ids,
     validate_generated_variants,
     validate_generated_line_hint,
+    validate_generated_csharp_project_type,
     validate_variant,
 )
 
@@ -55,6 +57,37 @@ class PracticeValidationTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+
+    def test_accepts_auto_project_type_only_for_framework_ai_generation(self):
+        self.assertIsNone(validate_csharp_environment(
+            'C#', 'dotnet_framework', 'auto', '외부 장비가 JSON 요청을 보냅니다.', allow_auto=True,
+        ))
+        self.assertIsNotNone(validate_csharp_environment(
+            'C#', 'dotnet', 'auto', '', allow_auto=True,
+        ))
+        self.assertIsNotNone(validate_csharp_environment(
+            'C#', 'dotnet_framework', 'auto', '', allow_auto=False,
+        ))
+
+    def test_resolves_framework_project_type_selected_by_ai(self):
+        self.assertEqual(resolve_generated_project_type(
+            {'project_type': 'aspnet_web_api2'}, 'C#', 'dotnet_framework', 'auto',
+        ), 'aspnet_web_api2')
+        with self.assertRaisesRegex(ValueError, '프로젝트 유형'):
+            resolve_generated_project_type(
+                {'project_type': 'aspnet_core_web_api'}, 'C#', 'dotnet_framework', 'auto',
+            )
+
+    def test_validates_auto_selected_web_api_structure(self):
+        variants = [
+            {'files': [
+                {'filename': 'PacketsController.cs', 'content': 'using System.Web.Http;\nclass PacketsController : ApiController {}'},
+            ]},
+        ]
+
+        validate_generated_csharp_project_type(variants, 'aspnet_web_api2')
+        with self.assertRaisesRegex(ValueError, '프로젝트 유형의 구조'):
+            validate_generated_csharp_project_type(variants, 'aspnet_mvc5')
 
     def test_accepts_delete_problem_ids(self):
         self.assertEqual(validate_delete_problem_ids([3, 7, 9]), [3, 7, 9])
