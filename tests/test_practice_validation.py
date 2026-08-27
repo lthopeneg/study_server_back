@@ -53,7 +53,7 @@ class PracticeValidationTests(unittest.TestCase):
 
     def test_accepts_matching_framework_selection(self):
         error = validate_csharp_environment(
-            'C#', 'dotnet_framework', 'console', 'ASP.NET Core 전용 API는 사용하지 않습니다.',
+            'C#', 'dotnet_framework', 'aspnet_mvc5', 'ASP.NET Core 전용 API는 사용하지 않습니다.',
         )
 
         self.assertIsNone(error)
@@ -86,7 +86,7 @@ class PracticeValidationTests(unittest.TestCase):
         ]
 
         validate_generated_csharp_project_type(variants, 'aspnet_web_api2')
-        with self.assertRaisesRegex(ValueError, '프로젝트 유형의 구조'):
+        with self.assertRaisesRegex(ValueError, '실제 코드 구조'):
             validate_generated_csharp_project_type(variants, 'aspnet_mvc5')
 
     def test_accepts_delete_problem_ids(self):
