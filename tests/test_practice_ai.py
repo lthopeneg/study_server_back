@@ -95,6 +95,38 @@ class PracticeAiTests(unittest.TestCase):
         self.assertIn('line_selection과 secure_blank 양쪽 코드', prompt)
         self.assertIn('정답 라인·빈칸 정답을 직접 알려주거나', prompt)
 
+    @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
+    @patch('services.practice_ai.OpenAI')
+    def test_requests_framework_project_type_auto_selection(self, openai_class, _collect_context):
+        client = MagicMock()
+        client.responses.create.return_value = SimpleNamespace(output_text=json.dumps({
+            'project_type': 'aspnet_web_api2',
+            'variants': [],
+        }))
+        openai_class.return_value = client
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+            result = generate_problem_draft(
+                language='C#',
+                runtime_platform='dotnet_framework',
+                project_type='auto',
+                major_topic='입력데이터 검증 및 표현',
+                minor_topic='메모리 버퍼 오버플로우',
+                difficulty='beginner',
+                minimum_files=3,
+                target_blank_count=3,
+                scenario='외부 장비가 JSON으로 패킷을 전송한다.',
+                extra_request='',
+                reference_scope='latest',
+                model='gpt-5.6-luna',
+            )
+
+        self.assertEqual(result['project_type'], 'aspnet_web_api2')
+        prompt = client.responses.create.call_args.kwargs['input']
+        self.assertIn('시나리오 기반 자동 선택', prompt)
+        self.assertIn('ASP.NET Web API 2(aspnet_web_api2)', prompt)
+        self.assertIn('최상위 project_type', prompt)
+
 
 if __name__ == '__main__':
     unittest.main()
