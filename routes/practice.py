@@ -35,6 +35,7 @@ MAX_ANSWER_LENGTH = 20_000
 MAX_SCENARIO_LENGTH = 5_000
 MAX_EXTRA_REQUEST_LENGTH = 5_000
 MAX_SUBMITTED_ANSWERS = 500
+MAX_BULK_DELETE_PROBLEMS = 100
 
 
 def validate_csharp_environment(language, runtime_platform, project_type, request_text=''):
@@ -66,6 +67,16 @@ def validate_text(value, field, maximum, required=False):
     if len(value) > maximum:
         return None, f'{field}은(는) {maximum:,}자 이하여야 합니다.'
     return value, None
+
+
+def validate_delete_problem_ids(raw_ids):
+    if not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= MAX_BULK_DELETE_PROBLEMS:
+        raise ValueError(f'삭제할 문제 번호는 1~{MAX_BULK_DELETE_PROBLEMS}개여야 합니다.')
+    if any(isinstance(problem_id, bool) or not isinstance(problem_id, int) or problem_id < 1 for problem_id in raw_ids):
+        raise ValueError('삭제할 문제 번호 형식이 올바르지 않습니다.')
+    if len(set(raw_ids)) != len(raw_ids):
+        raise ValueError('삭제할 문제 번호를 중복해서 지정할 수 없습니다.')
+    return raw_ids
 
 
 def validate_variant(raw_variant, expected_type):
@@ -836,6 +847,52 @@ def update_problem_set(problem_set_id):
         current_app.logger.exception('Practice problem set update failed')
         return jsonify({'status': 'error', 'message': '문제 세트 수정에 실패했습니다.'}), 500
     return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
+
+
+@practice_bp.route('/problems/<int:problem_set_id>', methods=['DELETE'])
+@jwt_required()
+def delete_problem_set(problem_set_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    problem_set = db.session.get(PracticeProblemSet, problem_set_id)
+    if not problem_set:
+        return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
+    try:
+        db.session.delete(problem_set)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Practice problem set deletion failed')
+        return jsonify({'status': 'error', 'message': '문제 세트 삭제에 실패했습니다.'}), 500
+    return jsonify({'status': 'success', 'data': {'deleted_ids': [problem_set_id]}})
+
+
+@practice_bp.route('/problems/delete-batch', methods=['POST'])
+@jwt_required()
+def delete_problem_sets_batch():
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    try:
+        problem_ids = validate_delete_problem_ids((request.get_json(silent=True) or {}).get('problem_ids'))
+    except ValueError as error:
+        return jsonify({'status': 'error', 'message': str(error)}), 400
+
+    problem_sets = PracticeProblemSet.query.filter(PracticeProblemSet.id.in_(problem_ids)).all()
+    found_ids = {problem_set.id for problem_set in problem_sets}
+    missing_ids = [problem_id for problem_id in problem_ids if problem_id not in found_ids]
+    if missing_ids:
+        return jsonify({'status': 'error', 'message': '일부 문제 세트를 찾을 수 없습니다.'}), 404
+    try:
+        for problem_set in problem_sets:
+            db.session.delete(problem_set)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Practice problem set batch deletion failed')
+        return jsonify({'status': 'error', 'message': '문제 세트 일괄 삭제에 실패했습니다.'}), 500
+    return jsonify({'status': 'success', 'data': {'deleted_ids': problem_ids}})
 
 
 @practice_bp.route('/problems/<int:problem_set_id>/download', methods=['GET'])
