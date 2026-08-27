@@ -25,6 +25,7 @@ class PracticeAiTests(unittest.TestCase):
                 minor_topic='SQL 삽입',
                 difficulty='beginner',
                 minimum_files=3,
+                target_blank_count=3,
                 scenario='',
                 extra_request='',
                 reference_scope='latest',
@@ -52,6 +53,7 @@ class PracticeAiTests(unittest.TestCase):
                 minor_topic='SQL 삽입',
                 difficulty='beginner',
                 minimum_files=3,
+                target_blank_count=4,
                 scenario='',
                 extra_request='',
                 reference_scope='latest',
@@ -61,6 +63,8 @@ class PracticeAiTests(unittest.TestCase):
         prompt = client.responses.create.call_args.kwargs['input']
         self.assertIn('실행 환경: .NET Framework', prompt)
         self.assertIn('프로젝트 유형: ASP.NET MVC 5', prompt)
+        self.assertIn('의미 있는 빈칸을 4개 이상 만드는 것을 목표', prompt)
+        self.assertIn('각각 최소 1개', prompt)
 
 
 if __name__ == '__main__':

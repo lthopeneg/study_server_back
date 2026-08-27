@@ -58,7 +58,7 @@ def collect_research_context(major_topic, minor_topic, scope):
     return '\n\n'.join(sections)
 
 
-def _build_prompt(*, language, runtime_platform, project_type, major_topic, minor_topic, difficulty, minimum_files, scenario, extra_request, research_context):
+def _build_prompt(*, language, runtime_platform, project_type, major_topic, minor_topic, difficulty, minimum_files, target_blank_count, scenario, extra_request, research_context):
     extension = '.py' if language == 'Python' else '.cs'
     platform_condition = ''
     if language == 'C#':
@@ -99,6 +99,9 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
 line_selection:
 - 실행 가능한 하나의 프로젝트를 구성합니다.
 - 취약점 데이터 흐름의 모든 정답을 Source, Validation Failure, Sink 역할로 분류합니다.
+- Source, Validation Failure, Sink 정답은 각각 최소 1개가 되도록 자연스러운 데이터 흐름을 구성합니다.
+- 역할별 정답 수에는 상한이 없습니다. 같은 역할에 해당하는 서로 다른 실행 코드 라인은 빠뜨리지 말고 모두 반환합니다.
+- 예를 들어 아이디와 비밀번호가 서로 다른 코드 라인에서 유입되면 두 라인을 모두 source 정답으로 반환합니다. 여러 입력을 한 정답으로 축약하지 않습니다.
 - 각 정답을 파일명, 1부터 시작하는 라인 번호, 해당 라인의 실제 코드 문자열(code), 역할(role)로 반환합니다.
 - role은 source, validation_failure, sink 중 하나만 사용합니다.
 - code에는 주석이나 설명이 아니라 files의 content에 실제로 존재하는 실행 코드 한 줄을 공백만 정리해 그대로 작성합니다.
@@ -106,7 +109,7 @@ line_selection:
 - 힌트는 Source, Validation Failure, Sink 순서의 세 구간으로 나눠 하나의 문자열로 생성합니다.
 - 각 구간 제목은 `- 문제에 맞는 설명 제목 (Source)`와 같은 형식으로 작성합니다.
 - 제목 다음에는 풀이 방향을 설명하고 마지막 줄에 `정답 라인 수: N개`를 작성합니다.
-- N은 해당 role로 반환한 실제 정답 개수와 정확히 일치해야 하며, 해당 역할의 정답이 없다면 0개로 작성합니다.
+- N은 해당 role로 반환한 실제 정답 개수와 정확히 일치해야 하며 각 역할은 최소 1개여야 합니다.
 - 힌트로 정답 파일명, 함수명, 정확한 라인 번호를 직접 노출하지 않습니다.
 
 [1유형 힌트 형식 예시]
@@ -124,6 +127,9 @@ line_selection:
 
 secure_blank:
 - 안전한 구현이 포함된 실행 가능한 하나의 프로젝트를 구성합니다.
+- 의미 있는 빈칸을 {target_blank_count}개 이상 만드는 것을 목표로 합니다.
+- 목표 수를 우선 충족하되, 관련 없는 코드나 중복된 보안 조치를 추가하거나 의미 없는 빈칸을 만들어 개수를 억지로 맞추지 않습니다.
+- 문제 구조상 자연스럽게 만들 수 없다면 목표보다 적은 빈칸을 반환할 수 있습니다.
 - 학습자가 작성할 위치는 정확히 언더바 4개(____)로 표시합니다.
 - 모든 빈칸의 정확한 정답과 개별 힌트를 파일명 및 1부터 시작하는 라인 번호와 함께 반환합니다.
 - 각 빈칸의 정답은 함수명, 메서드명, 변수명, 상수 같은 단일 식별자 하나가 되도록 주변 코드를 구성합니다.

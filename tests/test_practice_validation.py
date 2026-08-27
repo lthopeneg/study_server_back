@@ -8,6 +8,7 @@ from flask import Flask
 import routes.practice as practice_route
 from routes.practice import (
     build_problem_archive,
+    build_generation_warnings,
     build_generated_blank_hint,
     grade_problem_submission,
     normalize_generated_blank_answers,
@@ -172,12 +173,16 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': make_structured_hint(sink=1),
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
                     'files': [
-                        {'filename': 'app.py', 'content': 'value = input()'},
-                        {'filename': 'db.py', 'content': 'execute(value)'},
+                        {'filename': 'app.py', 'content': 'value = input()\nvalidated = value.strip()'},
+                        {'filename': 'db.py', 'content': 'execute(validated)'},
                     ],
-                    'answers': [{'filename': 'db.py', 'line': 1, 'code': 'execute(value)', 'role': 'sink'}],
+                    'answers': [
+                        {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                        {'filename': 'app.py', 'line': 2, 'code': 'validated = value.strip()', 'role': 'validation_failure'},
+                        {'filename': 'db.py', 'line': 1, 'code': 'execute(validated)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -204,9 +209,13 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': make_structured_hint(source=1),
-                    'files': [{'filename': 'app.py', 'content': 'value = input()'}],
-                    'answers': [{'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'}],
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
+                    'files': [{'filename': 'app.py', 'content': 'value = input()\nquery = "SELECT " + value\nexecute(query)'}],
+                    'answers': [
+                        {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                        {'filename': 'app.py', 'line': 2, 'code': 'query = "SELECT " + value', 'role': 'validation_failure'},
+                        {'filename': 'app.py', 'line': 3, 'code': 'execute(query)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -225,9 +234,13 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': make_structured_hint(sink=1),
-                    'files': [{'filename': 'buffer.py', 'content': 'copy(destination, data)'}],
-                    'answers': [{'filename': 'buffer.py', 'line': 1, 'code': 'copy(destination, data)', 'role': 'sink'}],
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
+                    'files': [{'filename': 'buffer.py', 'content': 'data = receive()\nsize = len(data)\ncopy(destination, data)'}],
+                    'answers': [
+                        {'filename': 'buffer.py', 'line': 1, 'code': 'data = receive()', 'role': 'source'},
+                        {'filename': 'buffer.py', 'line': 2, 'code': 'size = len(data)', 'role': 'validation_failure'},
+                        {'filename': 'buffer.py', 'line': 3, 'code': 'copy(destination, data)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -327,12 +340,47 @@ class PracticeValidationTests(unittest.TestCase):
     def test_rejects_generated_line_hint_with_wrong_role_count(self):
         variant = {
             'problem_type': 'line_selection',
-            'hint': make_structured_hint(source=1),
-            'answers': [{'filename': 'db.py', 'line': 1, 'code': 'execute(value)', 'role': 'sink'}],
+            'hint': make_structured_hint(source=2, validation_failure=1, sink=1),
+            'answers': [
+                {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                {'filename': 'db.py', 'line': 1, 'code': 'query = build(value)', 'role': 'validation_failure'},
+                {'filename': 'db.py', 'line': 2, 'code': 'execute(query)', 'role': 'sink'},
+            ],
         }
 
         with self.assertRaisesRegex(ValueError, '실제 정답 수'):
             validate_generated_line_hint(variant)
+
+    def test_rejects_generated_line_hint_when_any_required_role_is_missing(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'hint': make_structured_hint(source=1, sink=1),
+            'answers': [
+                {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                {'filename': 'db.py', 'line': 1, 'code': 'execute(value)', 'role': 'sink'},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '각각 최소 1개'):
+            validate_generated_line_hint(variant)
+
+    def test_warns_when_generated_blank_count_is_below_target(self):
+        variants = [
+            {'problem_type': 'line_selection', 'answers': [{}, {}, {}]},
+            {'problem_type': 'secure_blank', 'answers': [{}, {}]},
+        ]
+
+        warnings = build_generation_warnings(variants, 3)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], r'3.*2')
+
+    def test_does_not_warn_when_generated_blank_count_meets_target(self):
+        variants = [
+            {'problem_type': 'secure_blank', 'answers': [{}, {}, {}]},
+        ]
+
+        self.assertEqual(build_generation_warnings(variants, 3), [])
 
     def test_rejects_comment_as_line_selection_answer(self):
         variant, error = validate_variant(
