@@ -499,8 +499,36 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertFalse(result['correct'])
         self.assertFalse(result['variants'][0]['correct'])
+        self.assertEqual(result['variants'][0]['correct_count'], 0)
+        self.assertEqual(result['variants'][0]['answers'], [
+            {'filename': 'buffer.py', 'line': 1, 'correct': False},
+        ])
         self.assertFalse(result['variants'][1]['answers'][0]['correct'])
         self.assertNotIn('expected_answer', result['variants'][1]['answers'][0])
+
+    def test_marks_each_submitted_line_without_revealing_unselected_answers(self):
+        result = grade_problem_submission(self.make_published_problem(), [
+            {
+                'problem_type': 'line_selection',
+                'answers': [
+                    {'filename': 'buffer.py', 'line': 2},
+                    {'filename': 'buffer.py', 'line': 1},
+                ],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'answers': [{'filename': 'buffer.py', 'line': 2, 'answer': 'BUFFER_SIZE'}],
+            },
+        ])
+
+        line_result = result['variants'][0]
+        self.assertFalse(line_result['correct'])
+        self.assertEqual(line_result['correct_count'], 1)
+        self.assertEqual(line_result['expected_count'], 1)
+        self.assertEqual(line_result['answers'], [
+            {'filename': 'buffer.py', 'line': 2, 'correct': True},
+            {'filename': 'buffer.py', 'line': 1, 'correct': False},
+        ])
 
 
 if __name__ == '__main__':

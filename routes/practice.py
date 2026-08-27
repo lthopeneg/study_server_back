@@ -379,11 +379,21 @@ def grade_problem_submission(problem_set, raw_variants):
         if problem_type == 'line_selection':
             expected_keys = {(item['filename'], item['line']) for item in expected_answers}
             is_correct = submitted_keys == expected_keys
+            answer_results = [
+                {
+                    'filename': item['filename'],
+                    'line': item['line'],
+                    'correct': (item['filename'], item['line']) in expected_keys,
+                }
+                for item in normalized_answers
+            ]
             results.append({
                 'problem_type': problem_type,
                 'correct': is_correct,
                 'submitted_count': len(submitted_keys),
                 'expected_count': len(expected_keys),
+                'correct_count': sum(1 for item in answer_results if item['correct']),
+                'answers': answer_results,
             })
             continue
 
