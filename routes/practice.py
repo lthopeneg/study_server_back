@@ -2,6 +2,7 @@ import json
 import io
 import re
 import zipfile
+from collections import Counter
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -21,10 +22,12 @@ ALLOWED_PROJECT_TYPES = {
 }
 ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
+LINE_ANSWER_ROLES = {'source', 'validation_failure', 'sink'}
 ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
 BLANK_PATTERN = re.compile(r'_{4,}')
 MAX_SOURCE_FILES_PER_VARIANT = 20
+MAX_TARGET_BLANK_COUNT = 20
 MAX_FILES_PER_VARIANT = 21
 MAX_CODE_LENGTH = 100_000
 MAX_HINT_LENGTH = 5_000
@@ -123,6 +126,8 @@ def validate_variant(raw_variant, expected_type):
             if not stripped_line or stripped_line.startswith(('#', '//')):
                 return None, '라인 선택형 정답은 빈 줄이나 주석이 아닌 실행 코드여야 합니다.'
             answer['code'] = stripped_line
+            if raw_answer.get('role') in LINE_ANSWER_ROLES:
+                answer['role'] = raw_answer['role']
         else:
             if len(BLANK_PATTERN.findall(answer_line)) != 1:
                 return None, '빈칸형 정답 라인에는 언더바 4개(____)가 필요합니다.'
@@ -374,11 +379,21 @@ def grade_problem_submission(problem_set, raw_variants):
         if problem_type == 'line_selection':
             expected_keys = {(item['filename'], item['line']) for item in expected_answers}
             is_correct = submitted_keys == expected_keys
+            answer_results = [
+                {
+                    'filename': item['filename'],
+                    'line': item['line'],
+                    'correct': (item['filename'], item['line']) in expected_keys,
+                }
+                for item in normalized_answers
+            ]
             results.append({
                 'problem_type': problem_type,
                 'correct': is_correct,
                 'submitted_count': len(submitted_keys),
                 'expected_count': len(expected_keys),
+                'correct_count': sum(1 for item in answer_results if item['correct']),
+                'answers': answer_results,
             })
             continue
 
@@ -455,6 +470,64 @@ def normalize_generated_blank_answers(raw_variant):
     return normalized
 
 
+def blank_ordinal(index):
+    labels = {1: '첫 번째', 2: '두 번째', 3: '세 번째'}
+    return labels.get(index, f'{index}번째')
+
+
+def build_generated_blank_hint(raw_variant):
+    if not isinstance(raw_variant, dict):
+        raise ValueError('2유형 힌트 형식이 올바르지 않습니다.')
+    raw_files = raw_variant.get('files')
+    raw_answers = raw_variant.get('answers')
+    if not isinstance(raw_files, list) or not isinstance(raw_answers, list):
+        raise ValueError('2유형 파일 또는 정답 형식이 올바르지 않습니다.')
+
+    blank_locations = []
+    for raw_file in raw_files:
+        if not isinstance(raw_file, dict):
+            continue
+        filename = raw_file.get('filename')
+        content = raw_file.get('content')
+        if not isinstance(filename, str) or not isinstance(content, str):
+            continue
+        occurrence = 0
+        for line_number, line_text in enumerate(content.splitlines(), start=1):
+            if len(BLANK_PATTERN.findall(line_text)) == 1:
+                occurrence += 1
+                blank_locations.append((filename, line_number, occurrence))
+
+    answer_by_location = {}
+    for answer in raw_answers:
+        if not isinstance(answer, dict):
+            raise ValueError('2유형 정답 형식이 올바르지 않습니다.')
+        key = (answer.get('filename'), answer.get('line'))
+        if key in answer_by_location:
+            raise ValueError('2유형의 같은 빈칸에 정답이 중복되었습니다.')
+        answer_by_location[key] = answer
+
+    blank_keys = {(filename, line) for filename, line, _ in blank_locations}
+    if blank_keys != set(answer_by_location):
+        raise ValueError('2유형의 모든 빈칸에는 정답과 개별 힌트가 하나씩 필요합니다.')
+
+    sections = []
+    for filename, line, occurrence in blank_locations:
+        answer = answer_by_location[(filename, line)]
+        hint_text, error = validate_text(answer.get('hint', ''), '빈칸별 힌트', 1_000, required=True)
+        if error:
+            raise ValueError(error)
+        answer_text = str(answer.get('answer') or '').strip()
+        if len(answer_text) >= 3 and re.search(
+            rf'(?<!\w){re.escape(answer_text)}(?!\w)', hint_text, re.IGNORECASE,
+        ):
+            raise ValueError('2유형 빈칸별 힌트에 정답을 직접 포함할 수 없습니다.')
+        sections.append(
+            f'- {filename} ({blank_ordinal(occurrence)} 빈칸)\n  {hint_text}'
+        )
+
+    return {**raw_variant, 'hint': '\n\n'.join(sections)}
+
+
 def normalize_generated_line_answers(raw_variant):
     if not isinstance(raw_variant, dict):
         return raw_variant
@@ -492,6 +565,52 @@ def normalize_generated_line_answers(raw_variant):
     return normalized
 
 
+def validate_generated_line_hint(raw_variant):
+    hint = raw_variant.get('hint') if isinstance(raw_variant, dict) else None
+    answers = raw_variant.get('answers') if isinstance(raw_variant, dict) else None
+    if not isinstance(hint, str) or not isinstance(answers, list):
+        raise ValueError('1유형 힌트 또는 정답 형식이 올바르지 않습니다.')
+
+    header_pattern = re.compile(
+        r'^\s*-\s+.+?\s+\((Source|Validation Failure|Sink)\)\s*$',
+        re.MULTILINE,
+    )
+    headers = list(header_pattern.finditer(hint))
+    expected_labels = ['Source', 'Validation Failure', 'Sink']
+    if [match.group(1) for match in headers] != expected_labels:
+        raise ValueError('1유형 힌트는 Source, Validation Failure, Sink 순서의 세 구간이 필요합니다.')
+
+    role_by_label = {
+        'Source': 'source',
+        'Validation Failure': 'validation_failure',
+        'Sink': 'sink',
+    }
+    hinted_counts = {}
+    for index, header in enumerate(headers):
+        section_end = headers[index + 1].start() if index + 1 < len(headers) else len(hint)
+        section = hint[header.end():section_end]
+        count_match = re.search(r'^\s*정답 라인 수\s*:\s*(\d+)\s*개\s*$', section, re.MULTILINE)
+        if not count_match:
+            raise ValueError(f'1유형 {header.group(1)} 힌트에 정답 라인 수가 필요합니다.')
+        explanation = section[:count_match.start()].strip()
+        if not explanation:
+            raise ValueError(f'1유형 {header.group(1)} 힌트에 설명이 필요합니다.')
+        hinted_counts[role_by_label[header.group(1)]] = int(count_match.group(1))
+
+    answer_roles = []
+    for answer in answers:
+        role = answer.get('role') if isinstance(answer, dict) else None
+        if role not in LINE_ANSWER_ROLES:
+            raise ValueError('1유형의 모든 정답에는 source, validation_failure, sink 역할이 필요합니다.')
+        answer_roles.append(role)
+    actual_counts = Counter(answer_roles)
+    missing_roles = [role for role in LINE_ANSWER_ROLES if actual_counts[role] < 1]
+    if missing_roles:
+        raise ValueError('1유형은 Source, Validation Failure, Sink 정답을 각각 최소 1개 포함해야 합니다.')
+    if any(hinted_counts[role] != actual_counts[role] for role in LINE_ANSWER_ROLES):
+        raise ValueError('1유형 힌트의 정답 라인 수와 역할별 실제 정답 수가 일치하지 않습니다.')
+
+
 def validate_generated_variants(generated, minimum_files, language='Python'):
     raw_variants = generated.get('variants') if isinstance(generated, dict) else None
     if not isinstance(raw_variants, list):
@@ -508,8 +627,10 @@ def validate_generated_variants(generated, minimum_files, language='Python'):
         raw_variant = variant_map[problem_type]
         if problem_type == 'line_selection':
             raw_variant = normalize_generated_line_answers(raw_variant)
+            validate_generated_line_hint(raw_variant)
         else:
             raw_variant = normalize_generated_blank_answers(raw_variant)
+            raw_variant = build_generated_blank_hint(raw_variant)
         variant, error = validate_variant(raw_variant, problem_type)
         if error:
             raise ValueError(error)
@@ -538,6 +659,20 @@ def validate_generated_variants(generated, minimum_files, language='Python'):
     return validated_variants
 
 
+def build_generation_warnings(validated_variants, target_blank_count):
+    blank_variant = next(
+        (variant for variant in validated_variants if variant['problem_type'] == 'secure_blank'),
+        None,
+    )
+    actual_blank_count = len(blank_variant['answers']) if blank_variant else 0
+    if actual_blank_count >= target_blank_count:
+        return []
+    return [
+        f'2유형 목표 빈칸 수는 {target_blank_count}개지만 의미 있는 빈칸을 '
+        f'{actual_blank_count}개 생성했습니다. 저장 전에 내용을 검토해주세요.'
+    ]
+
+
 @practice_bp.route('/problems/generate', methods=['POST'])
 @jwt_required()
 @limiter.limit('5 per hour')
@@ -556,6 +691,7 @@ def generate_problem_set():
     scenario, scenario_error = validate_text(data.get('scenario', ''), '문제 시나리오', MAX_SCENARIO_LENGTH)
     extra_request, extra_error = validate_text(data.get('extra_request', ''), '추가 요청사항', MAX_EXTRA_REQUEST_LENGTH)
     minimum_files = data.get('minimum_files')
+    target_blank_count = data.get('target_blank_count', 3)
     reference_scope = data.get('reference_scope', 'latest')
     model = data.get('model', 'gpt-5.6-luna')
 
@@ -573,6 +709,8 @@ def generate_problem_set():
         return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
     if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_SOURCE_FILES_PER_VARIANT:
         return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_SOURCE_FILES_PER_VARIANT}여야 합니다.'}), 400
+    if isinstance(target_blank_count, bool) or not isinstance(target_blank_count, int) or not 1 <= target_blank_count <= MAX_TARGET_BLANK_COUNT:
+        return jsonify({'status': 'error', 'message': f'2유형 목표 빈칸 수는 1~{MAX_TARGET_BLANK_COUNT}여야 합니다.'}), 400
     if reference_scope not in {'latest', 'all'}:
         return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
     if model not in ALLOWED_AI_MODELS:
@@ -587,12 +725,14 @@ def generate_problem_set():
             minor_topic=minor_topic,
             difficulty=difficulty,
             minimum_files=minimum_files,
+            target_blank_count=target_blank_count,
             scenario=scenario,
             extra_request=extra_request,
             reference_scope=reference_scope,
             model=model,
         )
         validated_variants = validate_generated_variants(generated, minimum_files, language)
+        warnings = build_generation_warnings(validated_variants, target_blank_count)
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
         return jsonify({'status': 'error', 'message': f'AI 생성 결과 검증에 실패했습니다: {error}'}), 422
@@ -600,7 +740,7 @@ def generate_problem_set():
         current_app.logger.exception('AI practice problem generation failed')
         return jsonify({'status': 'error', 'message': 'AI 문제 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502
 
-    return jsonify({'status': 'success', 'data': {'variants': validated_variants}})
+    return jsonify({'status': 'success', 'data': {'variants': validated_variants, 'warnings': warnings}})
 
 
 @practice_bp.route('/public/problems', methods=['GET'])

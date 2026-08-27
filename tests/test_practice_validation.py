@@ -8,6 +8,8 @@ from flask import Flask
 import routes.practice as practice_route
 from routes.practice import (
     build_problem_archive,
+    build_generation_warnings,
+    build_generated_blank_hint,
     grade_problem_submission,
     normalize_generated_blank_answers,
     normalize_generated_line_answers,
@@ -16,8 +18,23 @@ from routes.practice import (
     serialize_problem_summary,
     validate_csharp_environment,
     validate_generated_variants,
+    validate_generated_line_hint,
     validate_variant,
 )
+
+
+def make_structured_hint(source=0, validation_failure=0, sink=0):
+    return (
+        '- 입력 데이터 유입 지점 (Source)\n'
+        '  외부 데이터가 처음 들어오는 흐름을 확인하세요.\n'
+        f'  정답 라인 수: {source}개\n\n'
+        '- 안전하지 않은 처리 지점 (Validation Failure)\n'
+        '  데이터가 충분히 보호되지 않는 과정을 확인하세요.\n'
+        f'  정답 라인 수: {validation_failure}개\n\n'
+        '- 위험한 최종 사용 지점 (Sink)\n'
+        '  데이터가 최종적으로 사용되는 지점을 확인하세요.\n'
+        f'  정답 라인 수: {sink}개'
+    )
 
 
 class PracticeValidationTests(unittest.TestCase):
@@ -156,12 +173,16 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': '입력부터 실행 지점까지 살펴보세요.',
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
                     'files': [
-                        {'filename': 'app.py', 'content': 'value = input()'},
-                        {'filename': 'db.py', 'content': 'execute(value)'},
+                        {'filename': 'app.py', 'content': 'value = input()\nvalidated = value.strip()'},
+                        {'filename': 'db.py', 'content': 'execute(validated)'},
                     ],
-                    'answers': [{'filename': 'db.py', 'line': 1, 'code': 'execute(value)'}],
+                    'answers': [
+                        {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                        {'filename': 'app.py', 'line': 2, 'code': 'validated = value.strip()', 'role': 'validation_failure'},
+                        {'filename': 'db.py', 'line': 1, 'code': 'execute(validated)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -170,7 +191,10 @@ class PracticeValidationTests(unittest.TestCase):
                         {'filename': 'app.py', 'content': 'value = input()'},
                         {'filename': 'db.py', 'content': 'execute(query, ____)'},
                     ],
-                    'answers': [{'filename': 'db.py', 'line': 1, 'answer': 'value'}],
+                    'answers': [{
+                        'filename': 'db.py', 'line': 1, 'answer': 'value',
+                        'hint': '조회문과 별도로 전달해야 하는 입력 데이터 변수를 사용하세요.',
+                    }],
                 },
             ],
         }
@@ -185,9 +209,13 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': '힌트',
-                    'files': [{'filename': 'app.py', 'content': 'value = input()'}],
-                    'answers': [{'filename': 'app.py', 'line': 1, 'code': 'value = input()'}],
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
+                    'files': [{'filename': 'app.py', 'content': 'value = input()\nquery = "SELECT " + value\nexecute(query)'}],
+                    'answers': [
+                        {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                        {'filename': 'app.py', 'line': 2, 'code': 'query = "SELECT " + value', 'role': 'validation_failure'},
+                        {'filename': 'app.py', 'line': 3, 'code': 'execute(query)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
@@ -206,15 +234,22 @@ class PracticeValidationTests(unittest.TestCase):
             'variants': [
                 {
                     'problem_type': 'line_selection',
-                    'hint': '힌트',
-                    'files': [{'filename': 'buffer.py', 'content': 'copy(destination, data)'}],
-                    'answers': [{'filename': 'buffer.py', 'line': 1, 'code': 'copy(destination, data)'}],
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
+                    'files': [{'filename': 'buffer.py', 'content': 'data = receive()\nsize = len(data)\ncopy(destination, data)'}],
+                    'answers': [
+                        {'filename': 'buffer.py', 'line': 1, 'code': 'data = receive()', 'role': 'source'},
+                        {'filename': 'buffer.py', 'line': 2, 'code': 'size = len(data)', 'role': 'validation_failure'},
+                        {'filename': 'buffer.py', 'line': 3, 'code': 'copy(destination, data)', 'role': 'sink'},
+                    ],
                 },
                 {
                     'problem_type': 'secure_blank',
                     'hint': '힌트',
                     'files': [{'filename': 'buffer.py', 'content': 'size = ____'}],
-                    'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'min(size, limit)'}],
+                    'answers': [{
+                        'filename': 'buffer.py', 'line': 1, 'answer': 'min(size, limit)',
+                        'hint': '두 크기 중 작은 값을 구하는 표현식이 필요합니다.',
+                    }],
                 },
             ],
         }
@@ -247,6 +282,39 @@ class PracticeValidationTests(unittest.TestCase):
         self.assertIn('____', normalized['files'][0]['content'])
         self.assertNotIn('________', normalized['files'][0]['content'])
 
+    def test_builds_blank_hint_by_file_and_occurrence(self):
+        variant = {
+            'problem_type': 'secure_blank',
+            'files': [
+                {'filename': 'config.py', 'content': 'first = ____\nsecond = ____'},
+                {'filename': 'service.py', 'content': 'handler = ____'},
+            ],
+            'answers': [
+                {'filename': 'config.py', 'line': 1, 'answer': 'PrimaryValue', 'hint': '첫 설정값을 나타내는 상수를 입력하세요.'},
+                {'filename': 'config.py', 'line': 2, 'answer': 'SecondaryValue', 'hint': '두 번째 설정값을 나타내는 상수를 입력하세요.'},
+                {'filename': 'service.py', 'line': 1, 'answer': 'ErrorHandler', 'hint': '오류를 처리하는 클래스 이름을 입력하세요.'},
+            ],
+        }
+
+        result = build_generated_blank_hint(variant)
+
+        self.assertIn('- config.py (첫 번째 빈칸)', result['hint'])
+        self.assertIn('- config.py (두 번째 빈칸)', result['hint'])
+        self.assertIn('- service.py (첫 번째 빈칸)', result['hint'])
+
+    def test_rejects_blank_hint_that_reveals_answer(self):
+        variant = {
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'service.py', 'content': 'handler = ____'}],
+            'answers': [{
+                'filename': 'service.py', 'line': 1, 'answer': 'ErrorHandler',
+                'hint': 'ErrorHandler 클래스 이름을 입력하세요.',
+            }],
+        }
+
+        with self.assertRaisesRegex(ValueError, '정답을 직접'):
+            build_generated_blank_hint(variant)
+
     def test_corrects_generated_line_answer_using_code_anchor(self):
         variant = {
             'problem_type': 'line_selection',
@@ -268,6 +336,51 @@ class PracticeValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, '실제 코드 한 줄'):
             normalize_generated_line_answers(variant)
+
+    def test_rejects_generated_line_hint_with_wrong_role_count(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'hint': make_structured_hint(source=2, validation_failure=1, sink=1),
+            'answers': [
+                {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                {'filename': 'db.py', 'line': 1, 'code': 'query = build(value)', 'role': 'validation_failure'},
+                {'filename': 'db.py', 'line': 2, 'code': 'execute(query)', 'role': 'sink'},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '실제 정답 수'):
+            validate_generated_line_hint(variant)
+
+    def test_rejects_generated_line_hint_when_any_required_role_is_missing(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'hint': make_structured_hint(source=1, sink=1),
+            'answers': [
+                {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                {'filename': 'db.py', 'line': 1, 'code': 'execute(value)', 'role': 'sink'},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '각각 최소 1개'):
+            validate_generated_line_hint(variant)
+
+    def test_warns_when_generated_blank_count_is_below_target(self):
+        variants = [
+            {'problem_type': 'line_selection', 'answers': [{}, {}, {}]},
+            {'problem_type': 'secure_blank', 'answers': [{}, {}]},
+        ]
+
+        warnings = build_generation_warnings(variants, 3)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], r'3.*2')
+
+    def test_does_not_warn_when_generated_blank_count_meets_target(self):
+        variants = [
+            {'problem_type': 'secure_blank', 'answers': [{}, {}, {}]},
+        ]
+
+        self.assertEqual(build_generation_warnings(variants, 3), [])
 
     def test_rejects_comment_as_line_selection_answer(self):
         variant, error = validate_variant(
@@ -386,8 +499,36 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertFalse(result['correct'])
         self.assertFalse(result['variants'][0]['correct'])
+        self.assertEqual(result['variants'][0]['correct_count'], 0)
+        self.assertEqual(result['variants'][0]['answers'], [
+            {'filename': 'buffer.py', 'line': 1, 'correct': False},
+        ])
         self.assertFalse(result['variants'][1]['answers'][0]['correct'])
         self.assertNotIn('expected_answer', result['variants'][1]['answers'][0])
+
+    def test_marks_each_submitted_line_without_revealing_unselected_answers(self):
+        result = grade_problem_submission(self.make_published_problem(), [
+            {
+                'problem_type': 'line_selection',
+                'answers': [
+                    {'filename': 'buffer.py', 'line': 2},
+                    {'filename': 'buffer.py', 'line': 1},
+                ],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'answers': [{'filename': 'buffer.py', 'line': 2, 'answer': 'BUFFER_SIZE'}],
+            },
+        ])
+
+        line_result = result['variants'][0]
+        self.assertFalse(line_result['correct'])
+        self.assertEqual(line_result['correct_count'], 1)
+        self.assertEqual(line_result['expected_count'], 1)
+        self.assertEqual(line_result['answers'], [
+            {'filename': 'buffer.py', 'line': 2, 'correct': True},
+            {'filename': 'buffer.py', 'line': 1, 'correct': False},
+        ])
 
 
 if __name__ == '__main__':
