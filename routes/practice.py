@@ -15,10 +15,9 @@ from services.practice_ai import generate_problem_draft
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
 
 ALLOWED_LANGUAGES = {'Python', 'C#'}
-ALLOWED_RUNTIME_PLATFORMS = {'dotnet', 'dotnet_framework'}
+ALLOWED_RUNTIME_PLATFORMS = {'dotnet_framework'}
 ALLOWED_PROJECT_TYPES = {
-    'dotnet': {'console', 'aspnet_core_mvc', 'aspnet_core_web_api'},
-    'dotnet_framework': {'console', 'aspnet_mvc5', 'aspnet_web_api2'},
+    'dotnet_framework': {'aspnet_mvc5', 'aspnet_web_api2'},
 }
 ALLOWED_DIFFICULTIES = {'beginner', 'intermediate', 'advanced'}
 REQUIRED_TYPES = {'line_selection', 'secure_blank'}
@@ -42,7 +41,7 @@ def validate_csharp_environment(language, runtime_platform, project_type, reques
     if language != 'C#':
         return None
     if runtime_platform not in ALLOWED_RUNTIME_PLATFORMS:
-        return 'C# 실행 환경을 선택해주세요.'
+        return 'C# 문제는 .NET Framework 환경만 지원합니다.'
     auto_allowed = allow_auto and runtime_platform == 'dotnet_framework' and project_type == 'auto'
     if not auto_allowed and project_type not in ALLOWED_PROJECT_TYPES[runtime_platform]:
         return '선택한 실행 환경에서 지원하는 프로젝트 유형을 선택해주세요.'
@@ -66,20 +65,23 @@ def resolve_generated_project_type(generated, language, runtime_platform, reques
     return generated_project_type
 
 
-def validate_generated_csharp_project_type(variants, project_type):
-    markers = {
-        'aspnet_mvc5': (r'\bSystem\.Web\.Mvc\b|:\s*Controller\b', r'\bSystem\.Web\.Http\b|:\s*ApiController\b'),
-        'aspnet_web_api2': (r'\bSystem\.Web\.Http\b|:\s*ApiController\b', r'\bSystem\.Web\.Mvc\b|:\s*Controller\b'),
-    }
-    if project_type not in markers:
-        return
-    required_pattern, conflicting_pattern = markers[project_type]
+def detect_csharp_web_project_type(variants):
+    detected_types = []
     for variant in variants:
         source = '\n'.join(file['content'] for file in variant['files'] if file['filename'].lower().endswith('.cs'))
-        if not re.search(required_pattern, source):
-            raise ValueError('AI 생성 코드가 선택한 .NET Framework 프로젝트 유형의 구조를 포함하지 않습니다.')
-        if re.search(conflicting_pattern, source):
-            raise ValueError('AI 생성 코드에 서로 다른 .NET Framework 웹 프로젝트 유형이 혼합되어 있습니다.')
+        has_mvc = bool(re.search(r'\bSystem\.Web\.Mvc\b|:\s*Controller\b', source))
+        has_web_api = bool(re.search(r'\bSystem\.Web\.Http\b|:\s*ApiController\b', source))
+        if has_mvc == has_web_api:
+            raise ValueError('C# 코드는 ASP.NET MVC 5 또는 ASP.NET Web API 2 구조 중 하나를 명확히 포함해야 합니다.')
+        detected_types.append('aspnet_mvc5' if has_mvc else 'aspnet_web_api2')
+    if len(set(detected_types)) != 1:
+        raise ValueError('두 문제 유형에 서로 다른 .NET Framework 웹 프로젝트 유형이 사용되었습니다.')
+    return detected_types[0]
+
+
+def validate_generated_csharp_project_type(variants, project_type):
+    if detect_csharp_web_project_type(variants) != project_type:
+        raise ValueError('AI가 선택한 .NET Framework 프로젝트 유형과 실제 코드 구조가 일치하지 않습니다.')
 
 
 def get_admin_user(login_id):
@@ -250,10 +252,11 @@ def validate_problem_set_payload(data):
     minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return None, '언어 또는 난이도가 올바르지 않습니다.'
-    environment_error = validate_csharp_environment(language, runtime_platform, project_type, scenario)
-    if environment_error:
-        return None, environment_error
-    if language != 'C#':
+    if language == 'C#':
+        runtime_platform = 'dotnet_framework'
+        if project_type not in {None, 'auto', 'aspnet_mvc5', 'aspnet_web_api2'}:
+            return None, 'C# 프로젝트 유형은 ASP.NET MVC 5 또는 ASP.NET Web API 2여야 합니다.'
+    else:
         runtime_platform = None
         project_type = None
     if major_error or minor_error:
@@ -276,6 +279,15 @@ def validate_problem_set_payload(data):
         if variant_error:
             return None, variant_error
         validated_variants.append(variant)
+
+    if language == 'C#':
+        try:
+            detected_project_type = detect_csharp_web_project_type(validated_variants)
+        except ValueError as error:
+            return None, str(error)
+        if project_type not in {None, 'auto'} and project_type != detected_project_type:
+            return None, '저장된 프로젝트 유형과 실제 C# 코드 구조가 일치하지 않습니다.'
+        project_type = detected_project_type
 
     creation_method = data.get('creation_method', 'manual')
     if creation_method not in {'manual', 'ai'}:
@@ -737,14 +749,17 @@ def generate_problem_set():
 
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
+    if language == 'C#':
+        runtime_platform = 'dotnet_framework'
+        project_type = 'auto'
+    else:
+        runtime_platform = None
+        project_type = None
     environment_error = validate_csharp_environment(
         language, runtime_platform, project_type, f'{scenario}\n{extra_request}', allow_auto=True,
     )
     if environment_error:
         return jsonify({'status': 'error', 'message': environment_error}), 400
-    if language != 'C#':
-        runtime_platform = None
-        project_type = None
     if major_error or minor_error or scenario_error or extra_error:
         return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
     if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_SOURCE_FILES_PER_VARIANT:
