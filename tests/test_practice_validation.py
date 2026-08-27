@@ -17,6 +17,7 @@ from routes.practice import (
     serialize_public_problem_detail,
     serialize_problem_summary,
     validate_csharp_environment,
+    validate_delete_problem_ids,
     validate_generated_variants,
     validate_generated_line_hint,
     validate_variant,
@@ -54,6 +55,19 @@ class PracticeValidationTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+
+    def test_accepts_delete_problem_ids(self):
+        self.assertEqual(validate_delete_problem_ids([3, 7, 9]), [3, 7, 9])
+
+    def test_rejects_duplicate_delete_problem_ids(self):
+        with self.assertRaisesRegex(ValueError, '중복'):
+            validate_delete_problem_ids([3, 3])
+
+    def test_rejects_invalid_delete_problem_ids(self):
+        for problem_ids in ([], [0], [True], ['1']):
+            with self.subTest(problem_ids=problem_ids):
+                with self.assertRaises(ValueError):
+                    validate_delete_problem_ids(problem_ids)
 
     def test_accepts_line_selection_files_and_answers(self):
         variant, error = validate_variant(
