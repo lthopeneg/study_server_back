@@ -3,10 +3,40 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from services.practice_ai import generate_problem_draft, repair_problem_draft, review_problem_draft
+from services.practice_ai import (
+    generate_problem_draft,
+    generate_scenario_draft,
+    repair_problem_draft,
+    review_problem_draft,
+)
 
 
 class PracticeAiTests(unittest.TestCase):
+    @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
+    @patch('services.practice_ai.OpenAI')
+    def test_expands_short_scenario_and_generates_extra_request(self, openai_class, _collect_context):
+        client = MagicMock()
+        client.responses.create.return_value = SimpleNamespace(output_text=json.dumps({
+            'scenario': '쇼핑몰 상품 이미지 처리 API가 외부 판매자의 데이터를 수신합니다.',
+            'extra_request': '두 유형의 파일 구조와 데이터 흐름을 일관되게 구성합니다.',
+        }))
+        openai_class.return_value = client
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+            result = generate_scenario_draft(
+                language='C#', major_topic='입력데이터 검증 및 표현',
+                minor_topic='메모리 버퍼 오버플로우', difficulty='beginner',
+                minimum_files=3, target_blank_count=3, scenario_seed='쇼핑몰 API',
+                extra_request_seed='', reference_scope='latest', model='gpt-5.6-luna',
+            )
+
+        self.assertIn('쇼핑몰', result['scenario'])
+        self.assertTrue(result['extra_request'])
+        request = client.responses.create.call_args.kwargs
+        self.assertEqual(request['model'], 'gpt-5.6-luna')
+        self.assertIn('쇼핑몰 API', request['input'])
+        self.assertEqual(request['max_output_tokens'], 2_500)
+
     @patch('services.practice_ai.OpenAI')
     def test_reviews_generated_problem_quality(self, openai_class):
         client = MagicMock()
