@@ -481,7 +481,7 @@ class PracticeValidationTests(unittest.TestCase):
         self.assertIn('- config.py (두 번째 빈칸)', result['hint'])
         self.assertIn('- service.py (첫 번째 빈칸)', result['hint'])
 
-    def test_rejects_blank_hint_that_reveals_answer(self):
+    def test_replaces_blank_hint_that_reveals_answer(self):
         variant = {
             'problem_type': 'secure_blank',
             'files': [{'filename': 'service.py', 'content': 'handler = ____'}],
@@ -491,8 +491,24 @@ class PracticeValidationTests(unittest.TestCase):
             }],
         }
 
-        with self.assertRaisesRegex(ValueError, '정답을 직접'):
-            build_generated_blank_hint(variant)
+        result = build_generated_blank_hint(variant)
+
+        self.assertNotIn('ErrorHandler', result['hint'])
+        self.assertTrue(result['answers'][0]['hint'])
+
+    def test_fills_missing_blank_hint_from_code_context(self):
+        variant = {
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'service.py', 'content': 'safe_size = ____(requested, actual, capacity)'}],
+            'answers': [{
+                'filename': 'service.py', 'line': 1, 'answer': 'min', 'hint': '',
+            }],
+        }
+
+        result = build_generated_blank_hint(variant)
+
+        self.assertIn('보안 조치를 직접 수행하는 함수 또는 메서드', result['hint'])
+        self.assertEqual(result['answers'][0]['hint'], result['hint'].split('\n  ', 1)[1])
 
     def test_corrects_generated_line_answer_using_code_anchor(self):
         variant = {
