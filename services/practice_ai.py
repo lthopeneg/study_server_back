@@ -10,6 +10,23 @@ MAX_REFERENCE_CHARS = 30_000
 MAX_REFERENCE_FILE_BYTES = 1_000_000
 
 
+def _memory_buffer_rules(language):
+    if language == 'Python':
+        return '''
+[메모리 버퍼 오버플로우 필수 조건]
+- 2유형에서 ctypes 메모리 복사 크기는 외부 요청 길이, 실제 원본 데이터 길이(len), 대상 버퍼 용량을 모두 고려해 제한합니다.
+- 대상 버퍼 용량만 제한해서는 안 됩니다. 원본 데이터보다 많은 바이트를 읽는 범위 초과 읽기도 반드시 방지합니다.
+- 예: `copy_size = min(requested_size, len(packet_data), BUFFER_CAPACITY)`와 동등한 안전 조건을 구성합니다.
+- 실제로 제한된 copy_size만 ctypes.memmove 또는 동등한 Sink에 전달합니다.'''
+    return '''
+[메모리 버퍼 오버플로우 필수 조건]
+- 2유형은 음수 길이, 실제 배열의 Length 초과, 할당된 비관리 버퍼 용량 초과를 모두 검사합니다.
+- 검증을 통과한 길이만 Marshal.Copy 또는 동등한 Sink에 전달합니다.
+- AllocHGlobal로 할당한 메모리는 try/finally에서 FreeHGlobal로 해제합니다.
+- Base64 입력을 변환한다면 FormatException을 처리해 잘못된 문자열을 HTTP 오류로 반환합니다.
+- ASP.NET Web API 2 또는 MVC 5 의존성은 packages.config와 .csproj HintPath를 포함해 깨끗한 .NET Framework 빌드 환경에서도 복원 가능하게 구성합니다.'''
+
+
 def _research_root():
     if os.name == 'nt':
         default = r'C:\Users\user\Desktop\97_연구_노트'
@@ -97,6 +114,7 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
 - 각 문제 유형에 선택한 실행 환경에서 빌드 가능한 프로젝트 정의 파일(.csproj)을 하나씩 포함합니다.
 {auto_project_rule}
 {project_file_rule}'''
+    security_specific_rules = _memory_buffer_rules(language) if '메모리 버퍼 오버플로우' in minor_topic else ''
     return f'''당신은 시큐어코딩 실습 문제 출제자입니다.
 
 [출제 조건]
@@ -108,6 +126,7 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
 - 각 문제 유형은 최소 {minimum_files}개의 {extension} 파일로 구성합니다.
 - 관리자 시나리오: {scenario or '지정 없음'}
 - 추가 요청: {extra_request or '없음'}
+{security_specific_rules}
 
 [필수 결과]
 하나의 세트에 line_selection과 secure_blank 유형을 각각 하나씩 생성합니다.
@@ -215,3 +234,49 @@ def generate_problem_draft(**conditions):
     except json.JSONDecodeError as error:
         raise RuntimeError('AI 응답을 JSON으로 해석할 수 없습니다.') from error
     return result
+
+
+def repair_problem_draft(generated, validation_error, **conditions):
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
+
+    repair_prompt = f'''다음 시큐어코딩 문제 JSON이 서버 품질 검사를 통과하지 못했습니다.
+
+[출제 조건]
+- 언어: {conditions['language']}
+- 실행 환경: {conditions.get('runtime_platform') or '해당 없음'}
+- 프로젝트 유형 요청: {conditions.get('project_type') or '해당 없음'}
+- 대주제: {conditions['major_topic']}
+- 소주제: {conditions['minor_topic']}
+- 난이도: {conditions['difficulty']}
+- 유형별 최소 소스 파일 수: {conditions['minimum_files']}
+- 2유형 목표 빈칸 수: {conditions['target_blank_count']}
+
+[검사 실패 원인]
+{validation_error}
+
+[수정 규칙]
+- 실패 원인을 해결하는 데 필요한 부분만 수정하되 두 문제 유형의 시나리오, 파일명, 변수명과 흐름은 최대한 유지합니다.
+- line_selection의 Source, Validation Failure, Sink 정답과 힌트 개수를 수정된 코드에 맞춰 다시 계산합니다.
+- secure_blank의 모든 ____ 위치, 정답, 개별 힌트를 수정된 코드에 맞춰 다시 계산합니다.
+- 정답은 다른 코드에서 그대로 보고 복사할 수 있는 장식용 빈칸보다 보안 조치에 직접 필요한 식별자를 우선합니다.
+- 설명이나 마크다운 없이 수정된 전체 JSON 객체만 반환합니다.
+
+[기존 JSON]
+{json.dumps(generated, ensure_ascii=False)}
+'''
+    client = OpenAI(api_key=api_key, timeout=45.0)
+    response = client.responses.create(
+        model=conditions['model'],
+        instructions='검증 실패 원인을 정확히 수정하고 전체 JSON만 반환하는 시큐어코딩 문제 교정자입니다.',
+        input=repair_prompt,
+        text={'format': {'type': 'json_object'}},
+        max_output_tokens=16_000,
+    )
+    if not response.output_text:
+        raise RuntimeError('AI가 수정 결과를 반환하지 않았습니다.')
+    try:
+        return json.loads(response.output_text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError('AI 수정 응답을 JSON으로 해석할 수 없습니다.') from error

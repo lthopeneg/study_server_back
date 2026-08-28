@@ -1,3 +1,4 @@
+import ast
 import json
 import io
 import re
@@ -9,7 +10,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
 from models import PracticeProblemFile, PracticeProblemSet, PracticeProblemVariant, User
-from services.practice_ai import generate_problem_draft
+from services.practice_ai import generate_problem_draft, repair_problem_draft
 
 
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
@@ -711,6 +712,153 @@ def validate_generated_variants(generated, minimum_files, language='Python'):
     return validated_variants
 
 
+def _completed_variant_file_content(variant, file):
+    lines = file['content'].split('\n')
+    for answer in variant.get('answers', []):
+        if answer.get('filename') != file['filename']:
+            continue
+        line_index = answer.get('line', 0) - 1
+        if 0 <= line_index < len(lines) and '____' in lines[line_index]:
+            lines[line_index] = lines[line_index].replace('____', answer.get('answer', ''), 1)
+    return '\n'.join(lines)
+
+
+def _variant_source(variant, extension):
+    return '\n'.join(
+        _completed_variant_file_content(variant, file)
+        for file in variant['files'] if file['filename'].lower().endswith(extension)
+    )
+
+
+def validate_memory_buffer_security(validated_variants, language, minor_topic):
+    if '메모리 버퍼 오버플로우' not in minor_topic:
+        return
+    secure_variant = next(
+        variant for variant in validated_variants if variant['problem_type'] == 'secure_blank'
+    )
+    if language == 'Python':
+        found_sink = False
+        found_safe_sink = False
+        for file in secure_variant['files']:
+            if not file['filename'].lower().endswith('.py'):
+                continue
+            source = _completed_variant_file_content(secure_variant, file).replace('____', 'BLANK_ANSWER')
+            try:
+                tree = ast.parse(source)
+            except SyntaxError as error:
+                raise ValueError(f'2유형 Python 코드 구문을 해석할 수 없습니다: {file["filename"]}') from error
+            bounded_names = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                    continue
+                if not isinstance(node.value.func, ast.Name) or node.value.func.id != 'min' or len(node.value.args) < 3:
+                    continue
+                has_source_length = any(
+                    isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == 'len'
+                    for argument in node.value.args for child in ast.walk(argument)
+                )
+                has_capacity = any(
+                    isinstance(child, ast.Name) and any(token in child.id.casefold() for token in ('buffer', 'capacity', 'limit'))
+                    for argument in node.value.args for child in ast.walk(argument)
+                )
+                if has_source_length and has_capacity:
+                    bounded_names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr not in {'memmove', 'memcpy'}:
+                    continue
+                found_sink = True
+                if len(node.args) >= 3 and isinstance(node.args[2], ast.Name) and node.args[2].id in bounded_names:
+                    found_safe_sink = True
+        if not found_sink:
+            raise ValueError('2유형에 ctypes 메모리 복사 Sink가 필요합니다.')
+        if not found_safe_sink:
+            raise ValueError('2유형 ctypes 복사 크기는 요청 길이, 실제 원본 길이, 대상 버퍼 용량을 모두 제한한 값이어야 합니다.')
+        return
+
+    source = _variant_source(secure_variant, '.cs')
+    required_patterns = {
+        '음수 길이 검사': r'\b\w*(?:length|size)\w*\s*<\s*0',
+        '실제 배열 길이 검사': r'\.Length\b',
+        '버퍼 용량 검사': r'\b\w*(?:length|size)\w*\s*>\s*\w*(?:buffer|capacity|limit)\w*',
+        '비관리 메모리 복사': r'\bMarshal\.Copy\s*\(',
+        '비관리 메모리 해제': r'\bfinally\b[\s\S]*?\bMarshal\.FreeHGlobal\s*\(',
+    }
+    missing = [label for label, pattern in required_patterns.items() if not re.search(pattern, source, re.IGNORECASE)]
+    if 'Convert.FromBase64String' in source and not re.search(r'catch\s*\(\s*FormatException\b', source):
+        missing.append('잘못된 Base64 입력 처리')
+    if missing:
+        raise ValueError(f'2유형 C# 메모리 안전 조건이 누락되었습니다: {", ".join(missing)}')
+
+
+def validate_csharp_project_dependencies(validated_variants, project_type):
+    if project_type not in {'aspnet_mvc5', 'aspnet_web_api2'}:
+        return
+    package_id = 'Microsoft.AspNet.Mvc' if project_type == 'aspnet_mvc5' else 'Microsoft.AspNet.WebApi.Core'
+    assembly = 'System.Web.Mvc' if project_type == 'aspnet_mvc5' else 'System.Web.Http'
+    for variant in validated_variants:
+        csproj = next(
+            (file['content'] for file in variant['files'] if file['filename'].lower().endswith('.csproj')),
+            '',
+        )
+        packages = '\n'.join(
+            file['content'] for file in variant['files'] if file['filename'].lower() == 'packages.config'
+        )
+        if re.search(r'<Project\s+Sdk=', csproj, re.IGNORECASE) or not re.search(
+            r'<TargetFrameworkVersion>v4\.[0-9.]+</TargetFrameworkVersion>', csproj,
+        ):
+            raise ValueError('C# 프로젝트는 기존 형식의 .NET Framework 대상 .csproj여야 합니다.')
+        if assembly not in csproj or '<HintPath>' not in csproj or package_id not in packages:
+            raise ValueError(f'C# 프로젝트에 복원 가능한 {package_id} 패키지와 .csproj HintPath가 필요합니다.')
+
+
+def build_generation_quality_report(validated_variants, target_blank_count, minor_topic='', repair_attempted=False):
+    blank_variant = next(variant for variant in validated_variants if variant['problem_type'] == 'secure_blank')
+    blank_count = len(blank_variant['answers'])
+    exposed_answers = []
+    for answer in blank_variant['answers']:
+        answer_text = answer.get('answer', '')
+        occurrences = sum(
+            file['content'].count(answer_text) for file in blank_variant['files'] if answer_text
+        )
+        if occurrences:
+            exposed_answers.append(f'{answer["filename"]}:{answer["line"]}')
+    checks = [
+        {'key': 'structure', 'label': '파일·힌트·정답 형식', 'status': 'passed', 'message': '서버 형식 검사를 통과했습니다.'},
+        {
+            'key': 'security',
+            'label': '2유형 보안 필수 조건',
+            'status': 'passed' if '메모리 버퍼 오버플로우' in minor_topic else 'warning',
+            'message': (
+                '메모리 복사의 원본 길이·대상 용량 등 필수 안전 조건을 확인했습니다.'
+                if '메모리 버퍼 오버플로우' in minor_topic
+                else '이 소주제의 전용 의미 검사는 아직 없으며 공통 형식 검사만 적용되었습니다.'
+            ),
+        },
+        {
+            'key': 'blank_count',
+            'label': '2유형 목표 빈칸 수',
+            'status': 'passed' if blank_count >= target_blank_count else 'warning',
+            'message': f'목표 {target_blank_count}개 중 {blank_count}개가 생성되었습니다.',
+        },
+        {
+            'key': 'answer_exposure',
+            'label': '빈칸 정답 노출',
+            'status': 'warning' if exposed_answers else 'passed',
+            'message': (
+                f'다른 코드에 동일한 정답이 보이는 위치가 있습니다: {", ".join(exposed_answers)}'
+                if exposed_answers else '코드에서 동일한 정답 문자열의 직접 노출을 발견하지 못했습니다.'
+            ),
+        },
+    ]
+    return {
+        'status': 'warning' if any(check['status'] == 'warning' for check in checks) else 'passed',
+        'repair_attempted': repair_attempted,
+        'checks': checks,
+    }
+
+
 def build_generation_warnings(validated_variants, target_blank_count):
     blank_variant = next(
         (variant for variant in validated_variants if variant['problem_type'] == 'secure_blank'),
@@ -771,28 +919,50 @@ def generate_problem_set():
     if model not in ALLOWED_AI_MODELS:
         return jsonify({'status': 'error', 'message': '지원하지 않는 AI 모델입니다.'}), 400
 
+    generation_conditions = {
+        'language': language,
+        'runtime_platform': runtime_platform,
+        'project_type': project_type,
+        'major_topic': major_topic,
+        'minor_topic': minor_topic,
+        'difficulty': difficulty,
+        'minimum_files': minimum_files,
+        'target_blank_count': target_blank_count,
+        'scenario': scenario,
+        'extra_request': extra_request,
+        'reference_scope': reference_scope,
+        'model': model,
+    }
     try:
-        generated = generate_problem_draft(
-            language=language,
-            runtime_platform=runtime_platform,
-            project_type=project_type,
-            major_topic=major_topic,
-            minor_topic=minor_topic,
-            difficulty=difficulty,
-            minimum_files=minimum_files,
-            target_blank_count=target_blank_count,
-            scenario=scenario,
-            extra_request=extra_request,
-            reference_scope=reference_scope,
-            model=model,
-        )
-        resolved_project_type = resolve_generated_project_type(
-            generated, language, runtime_platform, project_type,
-        )
-        validated_variants = validate_generated_variants(generated, minimum_files, language)
-        if language == 'C#':
-            validate_generated_csharp_project_type(validated_variants, resolved_project_type)
+        generated = generate_problem_draft(**generation_conditions)
+        repair_attempted = False
+        for attempt in range(2):
+            try:
+                resolved_project_type = resolve_generated_project_type(
+                    generated, language, runtime_platform, project_type,
+                )
+                validated_variants = validate_generated_variants(generated, minimum_files, language)
+                validate_memory_buffer_security(validated_variants, language, minor_topic)
+                if language == 'C#':
+                    validate_generated_csharp_project_type(validated_variants, resolved_project_type)
+                    validate_csharp_project_dependencies(validated_variants, resolved_project_type)
+                break
+            except ValueError as validation_error:
+                if attempt == 1:
+                    raise
+                current_app.logger.warning(
+                    'AI practice problem quality validation failed; attempting repair: %s', validation_error,
+                )
+                generated = repair_problem_draft(
+                    generated, str(validation_error), **generation_conditions,
+                )
+                repair_attempted = True
         warnings = build_generation_warnings(validated_variants, target_blank_count)
+        if repair_attempted:
+            warnings.insert(0, '초기 생성 결과의 품질 문제를 감지해 AI 자동 수정 1회를 적용했습니다.')
+        quality_report = build_generation_quality_report(
+            validated_variants, target_blank_count, minor_topic, repair_attempted,
+        )
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
         return jsonify({'status': 'error', 'message': f'AI 생성 결과 검증에 실패했습니다: {error}'}), 422
@@ -804,6 +974,7 @@ def generate_problem_set():
         'variants': validated_variants,
         'warnings': warnings,
         'project_type': resolved_project_type,
+        'quality_report': quality_report,
     }})
 
 
