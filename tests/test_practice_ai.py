@@ -37,6 +37,33 @@ class PracticeAiTests(unittest.TestCase):
         self.assertIn('쇼핑몰 API', request['input'])
         self.assertEqual(request['max_output_tokens'], 2_500)
 
+    @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
+    @patch('services.practice_ai.OpenAI')
+    def test_replaces_exact_blank_count_with_server_target_policy(self, openai_class, _collect_context):
+        client = MagicMock()
+        client.responses.create.return_value = SimpleNamespace(output_text=json.dumps({
+            'scenario': '배송 조회 API가 외부 운송장 식별자를 처리합니다.',
+            'extra_request': (
+                '두 유형의 흐름을 일관되게 구성합니다. '
+                '2유형은 보안상 의미 있는 빈칸을 정확히 3개 설정합니다. '
+                '한글 주석으로 업무 흐름을 설명합니다.'
+            ),
+        }))
+        openai_class.return_value = client
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+            result = generate_scenario_draft(
+                language='Python', major_topic='입력데이터 검증 및 표현',
+                minor_topic='메모리 버퍼 오버플로우', difficulty='beginner',
+                minimum_files=3, target_blank_count=3, scenario_seed='',
+                extra_request_seed='', reference_scope='latest', model='gpt-5.6-luna',
+            )
+
+        self.assertNotIn('정확히 3개', result['extra_request'])
+        self.assertIn('빈칸 3개 이상을 목표', result['extra_request'])
+        self.assertIn('자연스럽게 만들 수 없다면 더 적게', result['extra_request'])
+        self.assertIn('한글 주석', result['extra_request'])
+
     @patch('services.practice_ai.OpenAI')
     def test_reviews_generated_problem_quality(self, openai_class):
         client = MagicMock()
