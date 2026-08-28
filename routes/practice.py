@@ -1039,7 +1039,13 @@ def build_generation_warnings(validated_variants, target_blank_count):
     ]
 
 
-@practice_bp.route('/problems/generate-scenario', methods=['POST'])
+@practice_bp.route('/problems/generate-scenario', methods=['OPTIONS'])
+@limiter.exempt
+def generate_problem_scenario_options():
+    return '', 204
+
+
+@practice_bp.route('/problems/generate-scenario', methods=['POST'], provide_automatic_options=False)
 @jwt_required()
 @limiter.limit('10 per hour')
 def generate_problem_scenario():
