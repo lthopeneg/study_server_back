@@ -655,6 +655,23 @@ def blank_ordinal(index):
     return labels.get(index, f'{index}번째')
 
 
+def fallback_blank_hint(line_text):
+    if re.search(r'\.\s*_{4,}\s*\(', line_text):
+        return (
+            '빈칸 앞 객체의 자료형과 이 호출 뒤에 사용되는 값을 함께 살펴보세요. '
+            '현재 보안 처리 단계에 필요한 동작을 제공하는 메서드 이름을 입력합니다.'
+        )
+    if re.search(r'_{4,}\s*\(', line_text):
+        return (
+            '괄호 안에 전달되는 값들과 이 줄의 결과가 다음 단계에서 사용되는 방식을 살펴보세요. '
+            '현재 보안 조치를 직접 수행하는 함수 또는 메서드 이름을 입력합니다.'
+        )
+    return (
+        '같은 파일의 선언부와 빈칸 전후 코드에서 이 값이 사용되는 위치를 비교해보세요. '
+        '현재 보안 조치를 완성하는 변수, 상수 또는 형식 이름을 입력합니다.'
+    )
+
+
 def build_generated_blank_hint(raw_variant):
     if not isinstance(raw_variant, dict):
         raise ValueError('2유형 힌트 형식이 올바르지 않습니다.')
@@ -675,7 +692,7 @@ def build_generated_blank_hint(raw_variant):
         for line_number, line_text in enumerate(content.splitlines(), start=1):
             if len(BLANK_PATTERN.findall(line_text)) == 1:
                 occurrence += 1
-                blank_locations.append((filename, line_number, occurrence))
+                blank_locations.append((filename, line_number, occurrence, line_text))
 
     answer_by_location = {}
     for answer in raw_answers:
@@ -686,26 +703,31 @@ def build_generated_blank_hint(raw_variant):
             raise ValueError('2유형의 같은 빈칸에 정답이 중복되었습니다.')
         answer_by_location[key] = answer
 
-    blank_keys = {(filename, line) for filename, line, _ in blank_locations}
+    blank_keys = {(filename, line) for filename, line, _, _ in blank_locations}
     if blank_keys != set(answer_by_location):
         raise ValueError('2유형의 모든 빈칸에는 정답과 개별 힌트가 하나씩 필요합니다.')
 
     sections = []
-    for filename, line, occurrence in blank_locations:
-        answer = answer_by_location[(filename, line)]
+    normalized_answers = [dict(answer) for answer in raw_answers]
+    normalized_answer_by_location = {
+        (answer.get('filename'), answer.get('line')): answer for answer in normalized_answers
+    }
+    for filename, line, occurrence, line_text in blank_locations:
+        answer = normalized_answer_by_location[(filename, line)]
         hint_text, error = validate_text(answer.get('hint', ''), '빈칸별 힌트', 1_000, required=True)
         if error:
-            raise ValueError(error)
+            hint_text = fallback_blank_hint(line_text)
         answer_text = str(answer.get('answer') or '').strip()
         if len(answer_text) >= 3 and re.search(
             rf'(?<!\w){re.escape(answer_text)}(?!\w)', hint_text, re.IGNORECASE,
         ):
-            raise ValueError('2유형 빈칸별 힌트에 정답을 직접 포함할 수 없습니다.')
+            hint_text = fallback_blank_hint(line_text)
+        answer['hint'] = hint_text
         sections.append(
             f'- {filename} ({blank_ordinal(occurrence)} 빈칸)\n  {hint_text}'
         )
 
-    return {**raw_variant, 'hint': '\n\n'.join(sections)}
+    return {**raw_variant, 'hint': '\n\n'.join(sections), 'answers': normalized_answers}
 
 
 def normalize_generated_line_answers(raw_variant):
