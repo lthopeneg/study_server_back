@@ -581,6 +581,21 @@ def normalize_generated_blank_answers(raw_variant):
         'files': [dict(item) if isinstance(item, dict) else item for item in raw_files],
         'answers': [dict(item) if isinstance(item, dict) else item for item in raw_answers],
     }
+    unique_answers = []
+    seen_exact_answers = set()
+    for answer in normalized['answers']:
+        if not isinstance(answer, dict):
+            unique_answers.append(answer)
+            continue
+        exact_key = (
+            answer.get('filename'), answer.get('line'),
+            answer.get('answer'), answer.get('hint'),
+        )
+        if exact_key in seen_exact_answers:
+            continue
+        seen_exact_answers.add(exact_key)
+        unique_answers.append(answer)
+    normalized['answers'] = unique_answers
     blank_lines_by_file = {}
     for raw_file in normalized['files']:
         if not isinstance(raw_file, dict) or not isinstance(raw_file.get('filename'), str):
@@ -613,6 +628,25 @@ def normalize_generated_blank_answers(raw_variant):
         ))
         for answer_index, actual_line in zip(answer_indexes, blank_lines):
             normalized['answers'][answer_index]['line'] = actual_line
+
+    answer_by_location = {}
+    deduplicated_answers = []
+    for answer in normalized['answers']:
+        if not isinstance(answer, dict):
+            deduplicated_answers.append(answer)
+            continue
+        location = (answer.get('filename'), answer.get('line'))
+        previous = answer_by_location.get(location)
+        if previous is None:
+            answer_by_location[location] = answer
+            deduplicated_answers.append(answer)
+            continue
+        if previous.get('answer') == answer.get('answer') and previous.get('hint') == answer.get('hint'):
+            continue
+        raise ValueError(
+            f'2유형 정답 위치가 충돌합니다: {location[0]} {location[1]}번 라인에 서로 다른 정답이 있습니다.'
+        )
+    normalized['answers'] = deduplicated_answers
     return normalized
 
 
@@ -708,6 +742,24 @@ def normalize_generated_line_answers(raw_variant):
             raise ValueError('라인 선택형 정답 코드는 파일 안에서 정확히 한 번만 일치해야 합니다.')
         answer['line'] = matches[0]
         answer['code'] = target
+    answer_by_location = {}
+    deduplicated_answers = []
+    for answer in normalized['answers']:
+        if not isinstance(answer, dict):
+            deduplicated_answers.append(answer)
+            continue
+        location = (answer.get('filename'), answer.get('line'))
+        previous = answer_by_location.get(location)
+        if previous is None:
+            answer_by_location[location] = answer
+            deduplicated_answers.append(answer)
+            continue
+        if previous.get('code') == answer.get('code') and previous.get('role') == answer.get('role'):
+            continue
+        raise ValueError(
+            f'1유형 정답 역할이 충돌합니다: {location[0]} {location[1]}번 라인에 서로 다른 역할이 있습니다.'
+        )
+    normalized['answers'] = deduplicated_answers
     return normalized
 
 

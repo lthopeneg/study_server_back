@@ -506,6 +506,43 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertEqual(normalized['answers'][0]['line'], 3)
 
+    def test_removes_exact_duplicate_generated_line_answer(self):
+        answer = {'filename': 'buffer.py', 'line': 1, 'code': 'data = input()', 'role': 'source'}
+        variant = {
+            'problem_type': 'line_selection',
+            'files': [{'filename': 'buffer.py', 'content': 'data = input()'}],
+            'answers': [answer, dict(answer)],
+        }
+
+        normalized = normalize_generated_line_answers(variant)
+
+        self.assertEqual(len(normalized['answers']), 1)
+
+    def test_rejects_conflicting_roles_on_same_generated_line(self):
+        variant = {
+            'problem_type': 'line_selection',
+            'files': [{'filename': 'buffer.py', 'content': 'data = input()'}],
+            'answers': [
+                {'filename': 'buffer.py', 'line': 1, 'code': 'data = input()', 'role': 'source'},
+                {'filename': 'buffer.py', 'line': 2, 'code': 'data = input()', 'role': 'sink'},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, r'buffer\.py 1번 라인'):
+            normalize_generated_line_answers(variant)
+
+    def test_removes_exact_duplicate_generated_blank_answer(self):
+        answer = {'filename': 'buffer.py', 'line': 1, 'answer': 'limit', 'hint': '허용 범위를 나타내는 값을 입력하세요.'}
+        variant = {
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'buffer.py', 'content': 'size = min(length, ____)'}],
+            'answers': [answer, dict(answer)],
+        }
+
+        normalized = normalize_generated_blank_answers(variant)
+
+        self.assertEqual(len(normalized['answers']), 1)
+
     def test_rejects_generated_line_answer_without_code_anchor(self):
         variant = {
             'problem_type': 'line_selection',
