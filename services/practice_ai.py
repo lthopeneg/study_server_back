@@ -111,7 +111,7 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
 - 프로젝트 유형: {project_labels[project_type]}
 - 선택한 실행 환경과 프로젝트 유형에서 사용할 수 있는 API와 프로젝트 구조만 사용합니다.
 {project_priority_rule}
-- 각 문제 유형에 선택한 실행 환경에서 빌드 가능한 프로젝트 정의 파일(.csproj)을 하나씩 포함합니다.
+- .csproj, packages.config, Web.config 같은 프로젝트 지원 파일은 서버가 검증된 템플릿으로 추가하므로 생성하지 않습니다.
 {auto_project_rule}
 {project_file_rule}'''
     security_specific_rules = _memory_buffer_rules(language) if '메모리 버퍼 오버플로우' in minor_topic else ''
@@ -280,3 +280,64 @@ def repair_problem_draft(generated, validation_error, **conditions):
         return json.loads(response.output_text)
     except json.JSONDecodeError as error:
         raise RuntimeError('AI 수정 응답을 JSON으로 해석할 수 없습니다.') from error
+
+
+def review_problem_draft(generated, **conditions):
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
+    review_prompt = f'''다음 시큐어코딩 문제 세트를 독립적으로 검수하세요.
+
+[기준]
+- 언어: {conditions['language']}
+- 대주제: {conditions['major_topic']}
+- 소주제: {conditions['minor_topic']}
+- 난이도: {conditions['difficulty']}
+- 1유형의 실제 Source, Validation Failure, Sink 정답 누락 여부
+- 2유형이 취약점을 완전히 해결하는지 여부와 새 취약점 발생 여부
+- 1유형과 2유형의 파일명, 클래스·함수·변수 및 시나리오 흐름 일관성
+- 빈칸이 보안 학습에 직접 필요하며 다른 코드에서 답이 지나치게 노출되지 않는지 여부
+- 힌트가 정답을 직접 노출하지 않으면서 충분히 유추 가능한지 여부
+
+[판정 규칙]
+- blocking_issues에는 오답, 취약점 미해결, 정답 누락, 실행 불가능한 핵심 코드처럼 저장 전에 반드시 고칠 문제만 작성합니다.
+- warnings에는 난이도, 정답 노출, 설명 품질처럼 관리자가 판단할 개선점을 작성합니다.
+- score는 0~100 정수로 평가합니다.
+- 코드나 문제를 수정하지 말고 아래 JSON만 반환합니다.
+
+{{"score":85,"blocking_issues":[],"warnings":[],"summary":"검수 요약"}}
+
+[검수 대상 JSON]
+{json.dumps(generated, ensure_ascii=False)}
+'''
+    client = OpenAI(api_key=api_key, timeout=45.0)
+    response = client.responses.create(
+        model=conditions['model'],
+        instructions='시큐어코딩 문제의 보안 정확성과 정답 완전성을 독립 검수하고 JSON만 반환합니다.',
+        input=review_prompt,
+        text={'format': {'type': 'json_object'}},
+        max_output_tokens=3_000,
+    )
+    if not response.output_text:
+        raise RuntimeError('AI가 검수 결과를 반환하지 않았습니다.')
+    try:
+        review = json.loads(response.output_text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError('AI 검수 응답을 JSON으로 해석할 수 없습니다.') from error
+    score = review.get('score')
+    blocking_issues = review.get('blocking_issues')
+    warnings = review.get('warnings')
+    summary = review.get('summary')
+    if (
+        isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100
+        or not isinstance(blocking_issues, list) or not all(isinstance(item, str) for item in blocking_issues)
+        or not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings)
+        or not isinstance(summary, str)
+    ):
+        raise RuntimeError('AI 검수 결과 형식이 올바르지 않습니다.')
+    return {
+        'score': score,
+        'blocking_issues': blocking_issues[:20],
+        'warnings': warnings[:20],
+        'summary': summary[:1_000],
+    }

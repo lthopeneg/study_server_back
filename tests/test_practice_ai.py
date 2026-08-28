@@ -3,10 +3,33 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from services.practice_ai import generate_problem_draft, repair_problem_draft
+from services.practice_ai import generate_problem_draft, repair_problem_draft, review_problem_draft
 
 
 class PracticeAiTests(unittest.TestCase):
+    @patch('services.practice_ai.OpenAI')
+    def test_reviews_generated_problem_quality(self, openai_class):
+        client = MagicMock()
+        client.responses.create.return_value = SimpleNamespace(output_text=json.dumps({
+            'score': 88,
+            'blocking_issues': [],
+            'warnings': ['빈칸 하나가 다소 쉽습니다.'],
+            'summary': '보안 흐름은 올바릅니다.',
+        }))
+        openai_class.return_value = client
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+            result = review_problem_draft(
+                {'variants': []},
+                language='Python', major_topic='입력데이터 검증 및 표현',
+                minor_topic='메모리 버퍼 오버플로우', difficulty='beginner',
+                model='gpt-5.6-luna',
+            )
+
+        self.assertEqual(result['score'], 88)
+        self.assertEqual(result['blocking_issues'], [])
+        self.assertIn('빈칸', result['warnings'][0])
+
     @patch('services.practice_ai.OpenAI')
     def test_repairs_invalid_generated_problem_with_validation_error(self, openai_class):
         client = MagicMock()
