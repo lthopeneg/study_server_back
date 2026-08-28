@@ -10,7 +10,12 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
 from models import PracticeProblemFile, PracticeProblemSet, PracticeProblemVariant, User
-from services.practice_ai import generate_problem_draft, repair_problem_draft, review_problem_draft
+from services.practice_ai import (
+    generate_problem_draft,
+    generate_scenario_draft,
+    repair_problem_draft,
+    review_problem_draft,
+)
 
 
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
@@ -1032,6 +1037,59 @@ def build_generation_warnings(validated_variants, target_blank_count):
         f'2유형 목표 빈칸 수는 {target_blank_count}개지만 의미 있는 빈칸을 '
         f'{actual_blank_count}개 생성했습니다. 저장 전에 내용을 검토해주세요.'
     ]
+
+
+@practice_bp.route('/problems/generate-scenario', methods=['POST'])
+@jwt_required()
+@limiter.limit('10 per hour')
+def generate_problem_scenario():
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    data = request.get_json(silent=True) or {}
+    language = data.get('language')
+    difficulty = data.get('difficulty')
+    major_topic, major_error = validate_text(data.get('major_topic', ''), '대주제', 100, required=True)
+    minor_topic, minor_error = validate_text(data.get('minor_topic', ''), '소주제', 255, required=True)
+    scenario_seed, scenario_error = validate_text(data.get('scenario', ''), '문제 시나리오', MAX_SCENARIO_LENGTH)
+    extra_request_seed, extra_error = validate_text(
+        data.get('extra_request', ''), '추가 요청사항', MAX_EXTRA_REQUEST_LENGTH,
+    )
+    minimum_files = data.get('minimum_files')
+    target_blank_count = data.get('target_blank_count', 3)
+    reference_scope = data.get('reference_scope', 'latest')
+    model = data.get('model', 'gpt-5.6-luna')
+
+    if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
+        return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
+    if major_error or minor_error or scenario_error or extra_error:
+        return jsonify({'status': 'error', 'message': major_error or minor_error or scenario_error or extra_error}), 400
+    if isinstance(minimum_files, bool) or not isinstance(minimum_files, int) or not 1 <= minimum_files <= MAX_SOURCE_FILES_PER_VARIANT:
+        return jsonify({'status': 'error', 'message': f'유형별 최소 파일 수는 1~{MAX_SOURCE_FILES_PER_VARIANT}여야 합니다.'}), 400
+    if isinstance(target_blank_count, bool) or not isinstance(target_blank_count, int) or not 1 <= target_blank_count <= MAX_TARGET_BLANK_COUNT:
+        return jsonify({'status': 'error', 'message': f'2유형 목표 빈칸 수는 1~{MAX_TARGET_BLANK_COUNT}여야 합니다.'}), 400
+    if reference_scope not in {'latest', 'all'} or model not in ALLOWED_AI_MODELS:
+        return jsonify({'status': 'error', 'message': '연구노트 범위 또는 AI 모델이 올바르지 않습니다.'}), 400
+
+    try:
+        draft = generate_scenario_draft(
+            language=language,
+            major_topic=major_topic,
+            minor_topic=minor_topic,
+            difficulty=difficulty,
+            minimum_files=minimum_files,
+            target_blank_count=target_blank_count,
+            scenario_seed=scenario_seed,
+            extra_request_seed=extra_request_seed,
+            reference_scope=reference_scope,
+            model=model,
+        )
+    except Exception:
+        current_app.logger.exception('AI practice scenario generation failed')
+        return jsonify({'status': 'error', 'message': 'AI 시나리오 작성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502
+
+    return jsonify({'status': 'success', 'data': draft})
 
 
 @practice_bp.route('/problems/generate', methods=['POST'])

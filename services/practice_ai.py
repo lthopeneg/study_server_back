@@ -236,6 +236,72 @@ def generate_problem_draft(**conditions):
     return result
 
 
+def generate_scenario_draft(**conditions):
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
+
+    context = collect_research_context(
+        conditions['major_topic'], conditions['minor_topic'], conditions['reference_scope'],
+    )
+    language_environment = (
+        'Python의 일반적인 서버 또는 백엔드 환경'
+        if conditions['language'] == 'Python'
+        else '.NET Framework 기반 ASP.NET MVC 5 또는 ASP.NET Web API 2 환경'
+    )
+    prompt = f'''시큐어코딩 실습 문제를 만들기 위한 관리자 입력 초안을 작성하세요.
+
+[선택 조건]
+- 언어: {conditions['language']}
+- 실행 환경: {language_environment}
+- 대주제: {conditions['major_topic']}
+- 소주제: {conditions['minor_topic']}
+- 난이도: {conditions['difficulty']}
+- 유형별 최소 파일 수: {conditions['minimum_files']}
+- 2유형 목표 빈칸 수: {conditions['target_blank_count']}
+- 사용자가 입력한 시나리오 키워드 또는 초안: {conditions['scenario_seed'] or '없음'}
+- 사용자가 입력한 추가 조건: {conditions['extra_request_seed'] or '없음'}
+
+[작성 규칙]
+- 입력이 `쇼핑몰 API`처럼 짧으면 해당 키워드를 중심으로 현실적인 서비스 목적, 외부 입력, 처리 계층과 보안약점 발생 흐름이 드러나는 구체적인 시나리오로 확장합니다.
+- 입력이 비어 있으면 선택한 언어와 소주제에 적합한 새로운 업무 상황을 만듭니다.
+- 입력이 이미 상세하면 핵심 의도를 보존하면서 빠진 데이터 흐름과 업무 맥락만 보완합니다.
+- scenario는 문제의 배경과 기능을 설명합니다. 정답 위치나 해결 코드를 노출하지 않습니다.
+- extra_request는 문제 제작 조건만 작성하고 시나리오를 반복하지 않습니다.
+- extra_request에는 두 유형의 구조 일관성, 1유형의 Source·Validation Failure·Sink 정답 완전성, 2유형의 안전한 구현과 의미 있는 빈칸, 자연스러운 한글 주석 조건을 포함합니다.
+- 언어와 소주제에 필요한 핵심 보안 조건을 포함하되 특정 정답 식별자나 코드 한 줄을 강제하지 않습니다.
+- 최소 파일 수와 목표 빈칸 수를 억지로 채우기 위한 무관한 코드를 요구하지 않습니다.
+- 한국어로 작성하고 마크다운 없이 아래 JSON 객체만 반환합니다.
+
+{{"scenario":"완성된 시나리오","extra_request":"완성된 추가 요청사항"}}
+
+[연구노트 참고자료 시작]
+{context}
+[연구노트 참고자료 끝]
+'''
+    client = OpenAI(api_key=api_key, timeout=45.0)
+    response = client.responses.create(
+        model=conditions['model'],
+        instructions='선택 조건과 참고자료를 바탕으로 시큐어코딩 문제의 시나리오와 제작 조건을 작성하고 JSON만 반환합니다.',
+        input=prompt,
+        text={'format': {'type': 'json_object'}},
+        max_output_tokens=2_500,
+    )
+    if not response.output_text:
+        raise RuntimeError('AI가 시나리오 작성 결과를 반환하지 않았습니다.')
+    try:
+        result = json.loads(response.output_text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError('AI 시나리오 응답을 JSON으로 해석할 수 없습니다.') from error
+    scenario = result.get('scenario')
+    extra_request = result.get('extra_request')
+    if not isinstance(scenario, str) or not scenario.strip() or len(scenario) > 5_000:
+        raise RuntimeError('AI가 작성한 문제 시나리오 형식이 올바르지 않습니다.')
+    if not isinstance(extra_request, str) or not extra_request.strip() or len(extra_request) > 5_000:
+        raise RuntimeError('AI가 작성한 추가 요청사항 형식이 올바르지 않습니다.')
+    return {'scenario': scenario.strip(), 'extra_request': extra_request.strip()}
+
+
 def repair_problem_draft(generated, validation_error, **conditions):
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
