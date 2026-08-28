@@ -9,6 +9,7 @@ import routes.practice as practice_route
 from routes.practice import (
     build_problem_archive,
     build_generation_warnings,
+    build_generation_quality_report,
     build_generated_blank_hint,
     grade_problem_submission,
     normalize_generated_blank_answers,
@@ -22,6 +23,8 @@ from routes.practice import (
     validate_generated_variants,
     validate_generated_line_hint,
     validate_generated_csharp_project_type,
+    validate_csharp_project_dependencies,
+    validate_memory_buffer_security,
     validate_variant,
 )
 
@@ -88,6 +91,78 @@ class PracticeValidationTests(unittest.TestCase):
         validate_generated_csharp_project_type(variants, 'aspnet_web_api2')
         with self.assertRaisesRegex(ValueError, '실제 코드 구조'):
             validate_generated_csharp_project_type(variants, 'aspnet_mvc5')
+
+    def test_rejects_python_memory_copy_without_source_length_bound(self):
+        variants = [{
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'packet.py', 'content': (
+                'import ctypes\n'
+                'BUFFER_CAPACITY = 64\n'
+                'copy_size = min(requested_size, BUFFER_CAPACITY)\n'
+                'ctypes.memmove(buffer, packet_data, copy_size)'
+            )}],
+            'answers': [],
+        }]
+
+        with self.assertRaisesRegex(ValueError, '실제 원본 길이'):
+            validate_memory_buffer_security(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_accepts_python_memory_copy_with_all_three_bounds(self):
+        variants = [{
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'packet.py', 'content': (
+                'import ctypes\n'
+                'BUFFER_CAPACITY = 64\n'
+                'copy_size = min(requested_size, len(packet_data), BUFFER_CAPACITY)\n'
+                'ctypes.memmove(buffer, packet_data, copy_size)'
+            )}],
+            'answers': [],
+        }]
+
+        validate_memory_buffer_security(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_memory_security_uses_completed_blank_answer_code(self):
+        variants = [{
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'packet.py', 'content': (
+                'import ctypes\n'
+                'BUFFER_CAPACITY = 64\n'
+                'copy_size = min(requested_size, ____(packet_data), BUFFER_CAPACITY)\n'
+                'ctypes.memmove(buffer, packet_data, copy_size)'
+            )}],
+            'answers': [{'filename': 'packet.py', 'line': 3, 'answer': 'len'}],
+        }]
+
+        validate_memory_buffer_security(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_requires_framework_package_restore_metadata(self):
+        variants = [{
+            'problem_type': 'secure_blank',
+            'files': [
+                {'filename': 'Packet.csproj', 'content': (
+                    '<Project><TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>'
+                    '<Reference Include="System.Web.Http" /></Project>'
+                )},
+                {'filename': 'packages.config', 'content': '<packages></packages>'},
+            ],
+            'answers': [],
+        }]
+
+        with self.assertRaisesRegex(ValueError, '복원 가능한'):
+            validate_csharp_project_dependencies(variants, 'aspnet_web_api2')
+
+    def test_quality_report_warns_when_blank_answer_is_visible_elsewhere(self):
+        variants = [{
+            'problem_type': 'secure_blank',
+            'files': [{'filename': 'packet.py', 'content': 'copy_size = 1\ncopy(____)'}],
+            'answers': [{'filename': 'packet.py', 'line': 2, 'answer': 'copy_size'}],
+        }]
+
+        report = build_generation_quality_report(variants, 1, '메모리 버퍼 오버플로우')
+
+        self.assertEqual(report['status'], 'warning')
+        exposure = next(check for check in report['checks'] if check['key'] == 'answer_exposure')
+        self.assertEqual(exposure['status'], 'warning')
 
     def test_accepts_delete_problem_ids(self):
         self.assertEqual(validate_delete_problem_ids([3, 7, 9]), [3, 7, 9])
