@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 from openai import OpenAI
@@ -8,6 +9,27 @@ from openai import OpenAI
 TEXT_EXTENSIONS = {'.md', '.txt'}
 MAX_REFERENCE_CHARS = 30_000
 MAX_REFERENCE_FILE_BYTES = 1_000_000
+
+
+def _apply_blank_target_rule(extra_request, target_blank_count):
+    sentences = re.split(r'(?<=[.!?])\s+', extra_request.strip())
+    retained = [
+        sentence for sentence in sentences
+        if not (
+            '빈칸' in sentence
+            and ('정확히' in sentence or re.search(r'\d+\s*개', sentence))
+        )
+    ]
+    mandatory_rule = (
+        f'2유형은 보안상 의미 있는 빈칸 {target_blank_count}개 이상을 목표로 하되, '
+        '문제 구조상 자연스럽게 만들 수 없다면 더 적게 구성하고 무관하거나 중복된 코드를 '
+        '추가해 억지로 개수를 맞추지 않습니다.'
+    )
+    retained_text = ' '.join(retained).strip()
+    available = 5_000 - len(mandatory_rule) - 1
+    if len(retained_text) > available:
+        retained_text = retained_text[:available].rstrip()
+    return f'{retained_text} {mandatory_rule}'.strip()
 
 
 def _memory_buffer_rules(language):
@@ -269,6 +291,7 @@ def generate_scenario_draft(**conditions):
 - scenario는 문제의 배경과 기능을 설명합니다. 정답 위치나 해결 코드를 노출하지 않습니다.
 - extra_request는 문제 제작 조건만 작성하고 시나리오를 반복하지 않습니다.
 - extra_request에는 두 유형의 구조 일관성, 1유형의 Source·Validation Failure·Sink 정답 완전성, 2유형의 안전한 구현과 의미 있는 빈칸, 자연스러운 한글 주석 조건을 포함합니다.
+- extra_request에는 빈칸의 구체적인 개수나 `정확히 N개` 같은 수량 조건을 작성하지 않습니다. 빈칸 수 정책은 서버가 별도로 추가합니다.
 - 언어와 소주제에 필요한 핵심 보안 조건을 포함하되 특정 정답 식별자나 코드 한 줄을 강제하지 않습니다.
 - 최소 파일 수와 목표 빈칸 수를 억지로 채우기 위한 무관한 코드를 요구하지 않습니다.
 - 한국어로 작성하고 마크다운 없이 아래 JSON 객체만 반환합니다.
@@ -299,7 +322,8 @@ def generate_scenario_draft(**conditions):
         raise RuntimeError('AI가 작성한 문제 시나리오 형식이 올바르지 않습니다.')
     if not isinstance(extra_request, str) or not extra_request.strip() or len(extra_request) > 5_000:
         raise RuntimeError('AI가 작성한 추가 요청사항 형식이 올바르지 않습니다.')
-    return {'scenario': scenario.strip(), 'extra_request': extra_request.strip()}
+    extra_request = _apply_blank_target_rule(extra_request, conditions['target_blank_count'])
+    return {'scenario': scenario.strip(), 'extra_request': extra_request}
 
 
 def repair_problem_draft(generated, validation_error, **conditions):
