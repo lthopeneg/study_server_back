@@ -86,6 +86,10 @@ class PracticeAiTests(unittest.TestCase):
         self.assertEqual(result['score'], 88)
         self.assertEqual(result['blocking_issues'], [])
         self.assertIn('빈칸', result['warnings'][0])
+        prompt = client.responses.create.call_args.kwargs['input']
+        self.assertIn('Sink에 도달하지 않으면 관련 없는 정답', prompt)
+        self.assertIn('가장 핵심적인 함수·메서드·조건 요소', prompt)
+        self.assertIn('정답이 주변에 보인다는 이유만으로 blocking_issues', prompt)
 
     @patch('services.practice_ai.OpenAI')
     def test_repairs_invalid_generated_problem_with_validation_error(self, openai_class):
@@ -147,6 +151,9 @@ class PracticeAiTests(unittest.TestCase):
         request = client.responses.create.call_args.kwargs
         self.assertEqual(request['model'], 'gpt-5.6-luna')
         self.assertEqual(request['text'], {'format': {'type': 'json_object'}})
+        self.assertIn('Sink까지 전달되는 값의 유입 라인만', request['input'])
+        self.assertIn('answers 배열의 첫 번째 빈칸', request['input'])
+        self.assertIn('가장 핵심적인 함수·메서드·조건 요소', request['input'])
 
     @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
     @patch('services.practice_ai.OpenAI')
