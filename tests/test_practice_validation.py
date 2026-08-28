@@ -7,9 +7,11 @@ from flask import Flask
 
 import routes.practice as practice_route
 from routes.practice import (
+    apply_csharp_project_templates,
     build_problem_archive,
     build_generation_warnings,
     build_generation_quality_report,
+    build_variant_consistency_check,
     build_generated_blank_hint,
     grade_problem_submission,
     normalize_generated_blank_answers,
@@ -25,6 +27,7 @@ from routes.practice import (
     validate_generated_csharp_project_type,
     validate_csharp_project_dependencies,
     validate_memory_buffer_security,
+    validate_python_generated_syntax,
     validate_variant,
 )
 
@@ -151,12 +154,66 @@ class PracticeValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '복원 가능한'):
             validate_csharp_project_dependencies(variants, 'aspnet_web_api2')
 
-    def test_quality_report_warns_when_blank_answer_is_visible_elsewhere(self):
+    def test_server_injects_recoverable_web_api_project_template(self):
+        generated = {'variants': [{
+            'problem_type': 'line_selection',
+            'files': [
+                {'filename': 'Controller.cs', 'content': 'using System.Web.Http; class Controller : ApiController {}'},
+                {'filename': 'Bad.csproj', 'content': '<Project Sdk="Microsoft.NET.Sdk" />'},
+            ],
+            'answers': [],
+        }]}
+
+        apply_csharp_project_templates(generated, 'aspnet_web_api2')
+
+        files = generated['variants'][0]['files']
+        names = {file['filename'] for file in files}
+        self.assertIn('PracticeProblem.csproj', names)
+        self.assertIn('packages.config', names)
+        self.assertNotIn('Bad.csproj', names)
+        validate_csharp_project_dependencies(generated['variants'], 'aspnet_web_api2')
+
+    def test_rejects_invalid_generated_python_syntax(self):
         variants = [{
-            'problem_type': 'secure_blank',
-            'files': [{'filename': 'packet.py', 'content': 'copy_size = 1\ncopy(____)'}],
-            'answers': [{'filename': 'packet.py', 'line': 2, 'answer': 'copy_size'}],
+            'problem_type': 'line_selection',
+            'files': [{'filename': 'app.py', 'content': 'def broken(:\n    pass'}],
+            'answers': [],
         }]
+
+        with self.assertRaisesRegex(ValueError, 'Python 구문'):
+            validate_python_generated_syntax(variants, 'Python')
+
+    def test_warns_when_two_variants_have_unrelated_structure(self):
+        variants = [
+            {
+                'problem_type': 'line_selection',
+                'files': [{'filename': 'source.py', 'content': 'def receive_packet():\n    return packet_data'}],
+                'answers': [],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'unrelated.py', 'content': 'def calculate_invoice():\n    return total_price'}],
+                'answers': [],
+            },
+        ]
+
+        check = build_variant_consistency_check(variants, 'Python')
+
+        self.assertEqual(check['status'], 'warning')
+
+    def test_quality_report_warns_when_blank_answer_is_visible_elsewhere(self):
+        variants = [
+            {
+                'problem_type': 'line_selection',
+                'files': [{'filename': 'packet.py', 'content': 'copy_size = packet_size\ncopy(copy_size)'}],
+                'answers': [],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'packet.py', 'content': 'copy_size = 1\ncopy(____)'}],
+                'answers': [{'filename': 'packet.py', 'line': 2, 'answer': 'copy_size'}],
+            },
+        ]
 
         report = build_generation_quality_report(variants, 1, '메모리 버퍼 오버플로우')
 

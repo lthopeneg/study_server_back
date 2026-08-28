@@ -10,7 +10,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
 from models import PracticeProblemFile, PracticeProblemSet, PracticeProblemVariant, User
-from services.practice_ai import generate_problem_draft, repair_problem_draft
+from services.practice_ai import generate_problem_draft, repair_problem_draft, review_problem_draft
 
 
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
@@ -28,7 +28,7 @@ FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
 BLANK_PATTERN = re.compile(r'_{4,}')
 MAX_SOURCE_FILES_PER_VARIANT = 20
 MAX_TARGET_BLANK_COUNT = 20
-MAX_FILES_PER_VARIANT = 21
+MAX_FILES_PER_VARIANT = 24
 MAX_CODE_LENGTH = 100_000
 MAX_HINT_LENGTH = 5_000
 MAX_ANSWER_LENGTH = 20_000
@@ -83,6 +83,94 @@ def detect_csharp_web_project_type(variants):
 def validate_generated_csharp_project_type(variants, project_type):
     if detect_csharp_web_project_type(variants) != project_type:
         raise ValueError('AI가 선택한 .NET Framework 프로젝트 유형과 실제 코드 구조가 일치하지 않습니다.')
+
+
+def _csharp_project_template(source_filenames, project_type):
+    if project_type == 'aspnet_web_api2':
+        references = '''
+    <Reference Include="System.Web.Http">
+      <HintPath>..\\packages\\Microsoft.AspNet.WebApi.Core.5.2.9\\lib\\net45\\System.Web.Http.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Net.Http.Formatting">
+      <HintPath>..\\packages\\Microsoft.AspNet.WebApi.Client.5.2.9\\lib\\net45\\System.Net.Http.Formatting.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\\packages\\Newtonsoft.Json.13.0.3\\lib\\net45\\Newtonsoft.Json.dll</HintPath>
+    </Reference>'''
+        package_items = '''  <package id="Microsoft.AspNet.WebApi.Client" version="5.2.9" targetFramework="net472" />
+  <package id="Microsoft.AspNet.WebApi.Core" version="5.2.9" targetFramework="net472" />
+  <package id="Newtonsoft.Json" version="13.0.3" targetFramework="net472" />'''
+    else:
+        references = '''
+    <Reference Include="System.Web.Mvc">
+      <HintPath>..\\packages\\Microsoft.AspNet.Mvc.5.2.9\\lib\\net45\\System.Web.Mvc.dll</HintPath>
+    </Reference>'''
+        package_items = '''  <package id="Microsoft.AspNet.Mvc" version="5.2.9" targetFramework="net472" />
+  <package id="Microsoft.AspNet.Razor" version="3.2.9" targetFramework="net472" />
+  <package id="Microsoft.AspNet.WebPages" version="3.2.9" targetFramework="net472" />
+  <package id="Microsoft.Web.Infrastructure" version="2.0.1" targetFramework="net472" />'''
+    compile_items = '\n'.join(f'    <Compile Include="{filename}" />' for filename in source_filenames)
+    csproj = f'''<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>Library</OutputType>
+    <RootNamespace>PracticeProblem</RootNamespace>
+    <AssemblyName>PracticeProblem</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Net.Http" />{references}
+  </ItemGroup>
+  <ItemGroup>
+{compile_items}
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\\Microsoft.CSharp.targets" />
+</Project>'''
+    packages = f'''<?xml version="1.0" encoding="utf-8"?>
+<packages>
+{package_items}
+</packages>'''
+    web_config = '''<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <system.web>
+    <compilation debug="false" targetFramework="4.7.2" />
+    <httpRuntime targetFramework="4.7.2" />
+  </system.web>
+</configuration>'''
+    return [
+        {'filename': 'PracticeProblem.csproj', 'content': csproj},
+        {'filename': 'packages.config', 'content': packages},
+        {'filename': 'Web.config', 'content': web_config},
+    ]
+
+
+def apply_csharp_project_templates(generated, project_type):
+    raw_variants = generated.get('variants') if isinstance(generated, dict) else None
+    if not isinstance(raw_variants, list):
+        return generated
+    support_names = {'packages.config', 'web.config'}
+    for variant in raw_variants:
+        files = variant.get('files') if isinstance(variant, dict) else None
+        if not isinstance(files, list):
+            continue
+        source_filenames = [
+            file.get('filename') for file in files
+            if isinstance(file, dict) and isinstance(file.get('filename'), str)
+            and file['filename'].lower().endswith('.cs')
+        ]
+        variant['files'] = [
+            file for file in files
+            if not (
+                isinstance(file, dict) and isinstance(file.get('filename'), str)
+                and (file['filename'].lower().endswith('.csproj') or file['filename'].lower() in support_names)
+            )
+        ] + _csharp_project_template(source_filenames, project_type)
+    return generated
 
 
 def get_admin_user(login_id):
@@ -792,6 +880,57 @@ def validate_memory_buffer_security(validated_variants, language, minor_topic):
         raise ValueError(f'2유형 C# 메모리 안전 조건이 누락되었습니다: {", ".join(missing)}')
 
 
+def validate_python_generated_syntax(validated_variants, language):
+    if language != 'Python':
+        return
+    for variant in validated_variants:
+        for file in variant['files']:
+            if not file['filename'].lower().endswith('.py'):
+                continue
+            source = _completed_variant_file_content(variant, file)
+            try:
+                ast.parse(source)
+            except SyntaxError as error:
+                raise ValueError(
+                    f'{variant["problem_type"]}의 {file["filename"]} Python 구문이 올바르지 않습니다.'
+                ) from error
+
+
+def build_variant_consistency_check(validated_variants, language):
+    variant_map = {variant['problem_type']: variant for variant in validated_variants}
+    extension = '.py' if language == 'Python' else '.cs'
+    line_files = {
+        file['filename'] for file in variant_map['line_selection']['files']
+        if file['filename'].lower().endswith(extension)
+    }
+    blank_files = {
+        file['filename'] for file in variant_map['secure_blank']['files']
+        if file['filename'].lower().endswith(extension)
+    }
+    filename_ratio = len(line_files & blank_files) / max(1, len(line_files | blank_files))
+    identifier_pattern = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
+    ignored = {
+        'import', 'from', 'return', 'class', 'public', 'private', 'static', 'using', 'namespace',
+        'string', 'int', 'byte', 'void', 'true', 'false', 'none', 'null', 'self',
+    }
+    identifier_sets = []
+    for problem_type in ('line_selection', 'secure_blank'):
+        source = _variant_source(variant_map[problem_type], extension)
+        identifier_sets.append({
+            token for token in identifier_pattern.findall(source) if token.casefold() not in ignored
+        })
+    identifier_ratio = len(identifier_sets[0] & identifier_sets[1]) / max(1, len(identifier_sets[0] | identifier_sets[1]))
+    status = 'passed' if filename_ratio >= 0.7 and identifier_ratio >= 0.35 else 'warning'
+    return {
+        'key': 'consistency',
+        'label': '1·2유형 코드 일관성',
+        'status': status,
+        'message': (
+            f'소스 파일명 유사도 {filename_ratio:.0%}, 주요 식별자 유사도 {identifier_ratio:.0%}입니다.'
+        ),
+    }
+
+
 def validate_csharp_project_dependencies(validated_variants, project_type):
     if project_type not in {'aspnet_mvc5', 'aspnet_web_api2'}:
         return
@@ -813,7 +952,14 @@ def validate_csharp_project_dependencies(validated_variants, project_type):
             raise ValueError(f'C# 프로젝트에 복원 가능한 {package_id} 패키지와 .csproj HintPath가 필요합니다.')
 
 
-def build_generation_quality_report(validated_variants, target_blank_count, minor_topic='', repair_attempted=False):
+def build_generation_quality_report(
+    validated_variants,
+    target_blank_count,
+    minor_topic='',
+    language='Python',
+    repair_attempted=False,
+    ai_review=None,
+):
     blank_variant = next(variant for variant in validated_variants if variant['problem_type'] == 'secure_blank')
     blank_count = len(blank_variant['answers'])
     exposed_answers = []
@@ -851,10 +997,25 @@ def build_generation_quality_report(validated_variants, target_blank_count, mino
                 if exposed_answers else '코드에서 동일한 정답 문자열의 직접 노출을 발견하지 못했습니다.'
             ),
         },
+        build_variant_consistency_check(validated_variants, language),
     ]
+    if ai_review:
+        review_status = 'warning' if ai_review['warnings'] else 'passed'
+        checks.append({
+            'key': 'ai_review',
+            'label': 'AI 독립 검수',
+            'status': review_status,
+            'message': ai_review['summary'] + (
+                f' 개선 의견: {" / ".join(ai_review["warnings"])}' if ai_review['warnings'] else ''
+            ),
+        })
+    deductions = sum(10 for check in checks if check['status'] == 'warning')
+    deterministic_score = max(0, 100 - deductions)
+    ai_score = ai_review['score'] if ai_review else deterministic_score
     return {
         'status': 'warning' if any(check['status'] == 'warning' for check in checks) else 'passed',
         'repair_attempted': repair_attempted,
+        'score': round((deterministic_score + ai_score) / 2),
         'checks': checks,
     }
 
@@ -934,18 +1095,25 @@ def generate_problem_set():
         'model': model,
     }
     try:
+        def validate_candidate(candidate):
+            candidate_project_type = resolve_generated_project_type(
+                candidate, language, runtime_platform, project_type,
+            )
+            if language == 'C#':
+                apply_csharp_project_templates(candidate, candidate_project_type)
+            candidate_variants = validate_generated_variants(candidate, minimum_files, language)
+            validate_python_generated_syntax(candidate_variants, language)
+            validate_memory_buffer_security(candidate_variants, language, minor_topic)
+            if language == 'C#':
+                validate_generated_csharp_project_type(candidate_variants, candidate_project_type)
+                validate_csharp_project_dependencies(candidate_variants, candidate_project_type)
+            return candidate_project_type, candidate_variants
+
         generated = generate_problem_draft(**generation_conditions)
         repair_attempted = False
         for attempt in range(2):
             try:
-                resolved_project_type = resolve_generated_project_type(
-                    generated, language, runtime_platform, project_type,
-                )
-                validated_variants = validate_generated_variants(generated, minimum_files, language)
-                validate_memory_buffer_security(validated_variants, language, minor_topic)
-                if language == 'C#':
-                    validate_generated_csharp_project_type(validated_variants, resolved_project_type)
-                    validate_csharp_project_dependencies(validated_variants, resolved_project_type)
+                resolved_project_type, validated_variants = validate_candidate(generated)
                 break
             except ValueError as validation_error:
                 if attempt == 1:
@@ -957,11 +1125,40 @@ def generate_problem_set():
                     generated, str(validation_error), **generation_conditions,
                 )
                 repair_attempted = True
+        review_target = {'project_type': resolved_project_type, 'variants': validated_variants}
+        ai_review = review_problem_draft(review_target, **generation_conditions)
+        if ai_review['blocking_issues']:
+            if repair_attempted:
+                raise ValueError(
+                    'AI 독립 검수에서 자동 수정 후에도 중대 문제가 발견되었습니다: '
+                    + ' / '.join(ai_review['blocking_issues'])
+                )
+            generated = repair_problem_draft(
+                review_target,
+                'AI 독립 검수 중대 문제: ' + ' / '.join(ai_review['blocking_issues']),
+                **generation_conditions,
+            )
+            repair_attempted = True
+            resolved_project_type, validated_variants = validate_candidate(generated)
+            ai_review = {
+                'score': min(ai_review['score'], 80),
+                'blocking_issues': [],
+                'warnings': [
+                    *ai_review['warnings'],
+                    'AI 독립 검수의 중대 문제를 자동 수정했습니다. 최종 내용은 관리자가 확인해주세요.',
+                ],
+                'summary': '독립 검수에서 발견된 중대 문제를 자동 수정하고 서버 검사를 다시 통과했습니다.',
+            }
         warnings = build_generation_warnings(validated_variants, target_blank_count)
         if repair_attempted:
             warnings.insert(0, '초기 생성 결과의 품질 문제를 감지해 AI 자동 수정 1회를 적용했습니다.')
         quality_report = build_generation_quality_report(
-            validated_variants, target_blank_count, minor_topic, repair_attempted,
+            validated_variants,
+            target_blank_count,
+            minor_topic,
+            language,
+            repair_attempted,
+            ai_review,
         )
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
