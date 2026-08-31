@@ -26,6 +26,7 @@ from routes.practice import (
     validate_generated_line_hint,
     validate_generated_csharp_project_type,
     validate_csharp_project_dependencies,
+    validate_memory_buffer_answer_quality,
     validate_memory_buffer_security,
     validate_python_generated_syntax,
     validate_variant,
@@ -137,6 +138,78 @@ class PracticeValidationTests(unittest.TestCase):
         }]
 
         validate_memory_buffer_security(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_rejects_unrelated_python_memory_validation_answer(self):
+        variants = [
+            {
+                'problem_type': 'line_selection',
+                'files': [
+                    {'filename': 'routes.py', 'content': 'if image.filename.endswith(".png"):\n    pass'},
+                    {'filename': 'buffer.py', 'content': 'ctypes.memmove(buffer, data, size)'},
+                ],
+                'answers': [
+                    {'filename': 'routes.py', 'line': 1, 'code': 'if image.filename.endswith(".png"):', 'role': 'validation_failure'},
+                    {'filename': 'buffer.py', 'line': 1, 'code': 'ctypes.memmove(buffer, data, size)', 'role': 'sink'},
+                ],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'buffer.py', 'content': 'copy_size = ____(size, len(data), BUFFER_CAPACITY)'}],
+                'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'min'}],
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, '관련 없는 Validation Failure'):
+            validate_memory_buffer_answer_quality(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_rejects_non_core_first_python_memory_blank(self):
+        variants = [
+            {
+                'problem_type': 'line_selection',
+                'files': [{'filename': 'buffer.py', 'content': 'ctypes.memmove(buffer, data, size)'}],
+                'answers': [{'filename': 'buffer.py', 'line': 1, 'code': 'ctypes.memmove(buffer, data, size)', 'role': 'sink'}],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'buffer.py', 'content': (
+                    'if ____(data) > BUFFER_CAPACITY:\n    return\n'
+                    'copy_size = min(size, len(data), BUFFER_CAPACITY)'
+                )}],
+                'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'len'}],
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, '첫 번째 빈칸'):
+            validate_memory_buffer_answer_quality(variants, 'Python', '메모리 버퍼 오버플로우')
+
+    def test_accepts_core_first_python_memory_blank_and_relevant_answers(self):
+        variants = [
+            {
+                'problem_type': 'line_selection',
+                'files': [
+                    {'filename': 'routes.py', 'content': 'requested_size = request.form["size"]'},
+                    {'filename': 'buffer.py', 'content': (
+                        'if requested_size < 0:\n    return\n'
+                        'ctypes.memmove(buffer, packet_data, requested_size)'
+                    )},
+                ],
+                'answers': [
+                    {'filename': 'routes.py', 'line': 1, 'code': 'requested_size = request.form["size"]', 'role': 'source'},
+                    {'filename': 'buffer.py', 'line': 1, 'code': 'if requested_size < 0:', 'role': 'validation_failure'},
+                    {'filename': 'buffer.py', 'line': 3, 'code': 'ctypes.memmove(buffer, packet_data, requested_size)', 'role': 'sink'},
+                ],
+            },
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'buffer.py', 'content': (
+                    'copy_size = ____(requested_size, len(packet_data), BUFFER_CAPACITY)\n'
+                    'ctypes.memmove(buffer, packet_data, copy_size)'
+                )}],
+                'answers': [{'filename': 'buffer.py', 'line': 1, 'answer': 'min'}],
+            },
+        ]
+
+        validate_memory_buffer_answer_quality(variants, 'Python', '메모리 버퍼 오버플로우')
 
     def test_requires_framework_package_restore_metadata(self):
         variants = [{

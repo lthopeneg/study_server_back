@@ -959,6 +959,69 @@ def validate_memory_buffer_security(validated_variants, language, minor_topic):
         raise ValueError(f'2유형 C# 메모리 안전 조건이 누락되었습니다: {", ".join(missing)}')
 
 
+def validate_memory_buffer_answer_quality(validated_variants, language, minor_topic):
+    if language != 'Python' or '메모리 버퍼 오버플로우' not in minor_topic:
+        return
+    variant_map = {variant['problem_type']: variant for variant in validated_variants}
+    line_variant = variant_map.get('line_selection')
+    blank_variant = variant_map.get('secure_blank')
+    if not line_variant or not blank_variant:
+        return
+
+    source_target_pattern = re.compile(
+        r'(?:data|packet|payload|size|length|buffer|content|body|file|image|input|request|bytes|packaging)',
+        re.IGNORECASE,
+    )
+    memory_validation_pattern = re.compile(
+        r'(?:size|length|len\s*\(|capacity|buffer|packet|payload|data|bytes|copy|mem)',
+        re.IGNORECASE,
+    )
+    for answer in line_variant['answers']:
+        code = answer.get('code', '')
+        role = answer.get('role')
+        if role == 'source':
+            assignment = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=', code)
+            if assignment and not source_target_pattern.search(assignment.group(1)):
+                raise ValueError(
+                    f'1유형 관련 없는 Source 정답입니다: {answer["filename"]} {answer["line"]}번 라인의 '
+                    f'`{assignment.group(1)}` 값은 메모리 복사 데이터 흐름과 직접 관련되어야 합니다.'
+                )
+        elif role == 'validation_failure' and not memory_validation_pattern.search(code):
+            raise ValueError(
+                f'1유형 관련 없는 Validation Failure 정답입니다: {answer["filename"]} '
+                f'{answer["line"]}번 라인은 복사 길이·원본 길이·버퍼 용량 검증과 직접 관련되어야 합니다.'
+            )
+        elif role == 'sink' and not re.search(r'ctypes\s*\.\s*(?:memmove|memcpy)\s*\(', code):
+            raise ValueError(
+                f'1유형 Sink 정답이 실제 ctypes 메모리 복사 호출이 아닙니다: '
+                f'{answer["filename"]} {answer["line"]}번 라인.'
+            )
+
+    first_answer = blank_variant['answers'][0] if blank_variant['answers'] else None
+    if first_answer:
+        first_file = next(
+            (file for file in blank_variant['files'] if file['filename'] == first_answer['filename']), None,
+        )
+        first_line = ''
+        if first_file:
+            lines = first_file['content'].splitlines()
+            if 1 <= first_answer['line'] <= len(lines):
+                first_line = lines[first_answer['line'] - 1]
+        if not re.search(r'^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*_{4,}\s*\(', first_line):
+            raise ValueError(
+                f'2유형 첫 번째 빈칸은 안전한 복사 크기를 결정하는 핵심 함수 호출이어야 합니다: '
+                f'{first_answer["filename"]} {first_answer["line"]}번 라인.'
+            )
+
+    generic_answers = {'isinstance', 'encode', 'decode'}
+    for answer in blank_variant['answers']:
+        if str(answer.get('answer', '')).casefold() in generic_answers:
+            raise ValueError(
+                f'2유형의 {answer["filename"]} {answer["line"]}번 빈칸은 메모리 경계의 핵심 보안 조치보다 '
+                f'일반 처리 함수 `{answer["answer"]}`를 정답으로 사용하고 있습니다.'
+            )
+
+
 def validate_python_generated_syntax(validated_variants, language):
     if language != 'Python':
         return
@@ -1242,6 +1305,7 @@ def generate_problem_set():
             candidate_variants = validate_generated_variants(candidate, minimum_files, language)
             validate_python_generated_syntax(candidate_variants, language)
             validate_memory_buffer_security(candidate_variants, language, minor_topic)
+            validate_memory_buffer_answer_quality(candidate_variants, language, minor_topic)
             if language == 'C#':
                 validate_generated_csharp_project_type(candidate_variants, candidate_project_type)
                 validate_csharp_project_dependencies(candidate_variants, candidate_project_type)
