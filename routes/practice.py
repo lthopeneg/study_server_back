@@ -282,6 +282,49 @@ def validate_variant(raw_variant, expected_type):
     return {'problem_type': expected_type, 'hint': hint, 'files': files, 'answers': answers}, None
 
 
+def is_supported_format_string_answer(answer_text):
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', answer_text):
+        return True
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+', answer_text):
+        return True
+    return bool(re.fullmatch(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', answer_text))
+
+
+def build_recoverable_generation_draft(generated):
+    if not isinstance(generated, dict) or not isinstance(generated.get('variants'), list):
+        return None
+    variants = []
+    for raw_variant in generated['variants']:
+        if not isinstance(raw_variant, dict) or raw_variant.get('problem_type') not in REQUIRED_TYPES:
+            continue
+        files = [
+            {'filename': item.get('filename', ''), 'content': item.get('content', '')}
+            for item in raw_variant.get('files', [])
+            if isinstance(item, dict)
+            and isinstance(item.get('filename'), str)
+            and isinstance(item.get('content'), str)
+        ]
+        answers = []
+        for item in raw_variant.get('answers', []):
+            if not isinstance(item, dict):
+                continue
+            answer = {
+                key: item[key] for key in ('filename', 'line', 'code', 'role', 'answer', 'hint')
+                if key in item and isinstance(item[key], (str, int)) and not isinstance(item[key], bool)
+            }
+            if isinstance(answer.get('filename'), str) and isinstance(answer.get('line'), int):
+                answers.append(answer)
+        variants.append({
+            'problem_type': raw_variant['problem_type'],
+            'hint': raw_variant.get('hint', '') if isinstance(raw_variant.get('hint'), str) else '',
+            'files': files,
+            'answers': answers,
+        })
+    if not variants:
+        return None
+    return {'project_type': generated.get('project_type'), 'variants': variants}
+
+
 def serialize_problem_summary(problem_set):
     return {
         'id': problem_set.id,
@@ -831,7 +874,7 @@ def validate_generated_line_hint(raw_variant):
         raise ValueError('1유형 힌트의 정답 라인 수와 역할별 실제 정답 수가 일치하지 않습니다.')
 
 
-def validate_generated_variants(generated, minimum_files, language='Python'):
+def validate_generated_variants(generated, minimum_files, language='Python', minor_topic=''):
     raw_variants = generated.get('variants') if isinstance(generated, dict) else None
     if not isinstance(raw_variants, list):
         raise ValueError('AI가 문제 유형 데이터를 반환하지 않았습니다.')
@@ -866,10 +909,21 @@ def validate_generated_variants(generated, minimum_files, language='Python'):
             raise ValueError(f'AI가 {problem_type} 유형의 C# 프로젝트 파일(.csproj)을 생성하지 않았습니다.')
         if not variant['hint'].strip():
             raise ValueError(f'AI가 {problem_type} 유형의 힌트를 생성하지 않았습니다.')
-        if problem_type == 'secure_blank' and any(
-            answer.get('answer_kind') != 'identifier' for answer in variant['answers']
-        ):
-            raise ValueError('AI 빈칸 정답은 함수명, 변수명 또는 상수 같은 단일 식별자여야 합니다.')
+        if problem_type == 'secure_blank':
+            invalid_answers = [
+                answer for answer in variant['answers']
+                if answer.get('answer_kind') != 'identifier'
+                and not (
+                    '포맷 스트링' in minor_topic
+                    and is_supported_format_string_answer(answer.get('answer', ''))
+                )
+            ]
+            if invalid_answers:
+                if '포맷 스트링' in minor_topic:
+                    raise ValueError(
+                        '포맷 스트링 빈칸 정답은 단일 식별자, 문자열 리터럴 또는 단순 멤버 접근이어야 합니다.'
+                    )
+                raise ValueError('AI 빈칸 정답은 함수명, 변수명 또는 상수 같은 단일 식별자여야 합니다.')
         validated_variants.append({
             'problem_type': variant['problem_type'],
             'hint': variant['hint'],
@@ -1256,6 +1310,11 @@ def generate_problem_set():
     target_blank_count = data.get('target_blank_count', 3)
     reference_scope = data.get('reference_scope', 'latest')
     model = data.get('model', 'gpt-5.6-luna')
+    repair_draft = data.get('repair_draft')
+    repair_error, repair_error_validation = validate_text(
+        data.get('repair_error', ''), '이전 검증 오류', 2_000,
+        required=repair_draft is not None,
+    )
 
     if language not in ALLOWED_LANGUAGES or difficulty not in ALLOWED_DIFFICULTIES:
         return jsonify({'status': 'error', 'message': '언어 또는 난이도가 올바르지 않습니다.'}), 400
@@ -1280,6 +1339,13 @@ def generate_problem_set():
         return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
     if model not in ALLOWED_AI_MODELS:
         return jsonify({'status': 'error', 'message': '지원하지 않는 AI 모델입니다.'}), 400
+    if repair_error_validation:
+        return jsonify({'status': 'error', 'message': repair_error_validation}), 400
+    if repair_draft is not None:
+        if not isinstance(repair_draft, dict):
+            return jsonify({'status': 'error', 'message': '자동 수정할 AI 초안 형식이 올바르지 않습니다.'}), 400
+        if len(json.dumps(repair_draft, ensure_ascii=False)) > 500_000:
+            return jsonify({'status': 'error', 'message': '자동 수정할 AI 초안이 너무 큽니다.'}), 400
 
     generation_conditions = {
         'language': language,
@@ -1295,6 +1361,8 @@ def generate_problem_set():
         'reference_scope': reference_scope,
         'model': model,
     }
+    generated = None
+    repair_attempted = repair_draft is not None
     try:
         def validate_candidate(candidate):
             candidate_project_type = resolve_generated_project_type(
@@ -1302,7 +1370,9 @@ def generate_problem_set():
             )
             if language == 'C#':
                 apply_csharp_project_templates(candidate, candidate_project_type)
-            candidate_variants = validate_generated_variants(candidate, minimum_files, language)
+            candidate_variants = validate_generated_variants(
+                candidate, minimum_files, language, minor_topic,
+            )
             validate_python_generated_syntax(candidate_variants, language)
             validate_memory_buffer_security(candidate_variants, language, minor_topic)
             validate_memory_buffer_answer_quality(candidate_variants, language, minor_topic)
@@ -1311,22 +1381,25 @@ def generate_problem_set():
                 validate_csharp_project_dependencies(candidate_variants, candidate_project_type)
             return candidate_project_type, candidate_variants
 
-        generated = generate_problem_draft(**generation_conditions)
-        repair_attempted = False
-        for attempt in range(2):
-            try:
-                resolved_project_type, validated_variants = validate_candidate(generated)
-                break
-            except ValueError as validation_error:
-                if attempt == 1:
-                    raise
-                current_app.logger.warning(
-                    'AI practice problem quality validation failed; attempting repair: %s', validation_error,
-                )
-                generated = repair_problem_draft(
-                    generated, str(validation_error), **generation_conditions,
-                )
-                repair_attempted = True
+        if repair_draft is not None:
+            generated = repair_problem_draft(
+                repair_draft, repair_error, **generation_conditions,
+            )
+        else:
+            generated = generate_problem_draft(**generation_conditions)
+        try:
+            resolved_project_type, validated_variants = validate_candidate(generated)
+        except ValueError as validation_error:
+            if repair_attempted:
+                raise
+            current_app.logger.warning(
+                'AI practice problem quality validation failed; attempting repair: %s', validation_error,
+            )
+            generated = repair_problem_draft(
+                generated, str(validation_error), **generation_conditions,
+            )
+            repair_attempted = True
+            resolved_project_type, validated_variants = validate_candidate(generated)
         review_target = {'project_type': resolved_project_type, 'variants': validated_variants}
         ai_review = review_problem_draft(review_target, **generation_conditions)
         if ai_review['blocking_issues']:
@@ -1364,7 +1437,17 @@ def generate_problem_set():
         )
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
-        return jsonify({'status': 'error', 'message': f'AI 생성 결과 검증에 실패했습니다: {error}'}), 422
+        recoverable_draft = build_recoverable_generation_draft(generated)
+        return jsonify({
+            'status': 'error',
+            'message': f'AI 생성 결과 검증에 실패했습니다: {error}',
+            'data': {
+                'draft': recoverable_draft,
+                'validation_error': str(error),
+                'repair_attempted': repair_attempted,
+                'can_retry_repair': recoverable_draft is not None,
+            },
+        }), 422
     except Exception:
         current_app.logger.exception('AI practice problem generation failed')
         return jsonify({'status': 'error', 'message': 'AI 문제 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502

@@ -11,6 +11,7 @@ from routes.practice import (
     build_problem_archive,
     build_generation_warnings,
     build_generation_quality_report,
+    build_recoverable_generation_draft,
     build_variant_consistency_check,
     build_generated_blank_hint,
     grade_problem_submission,
@@ -28,6 +29,7 @@ from routes.practice import (
     validate_csharp_project_dependencies,
     validate_memory_buffer_answer_quality,
     validate_memory_buffer_security,
+    is_supported_format_string_answer,
     validate_python_generated_syntax,
     validate_variant,
 )
@@ -508,6 +510,64 @@ class PracticeValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, '단일 식별자'):
             validate_generated_variants(generated, 1)
+
+    def test_accepts_limited_format_string_answer_elements(self):
+        self.assertTrue(is_supported_format_string_answer('SafeFormat'))
+        self.assertTrue(is_supported_format_string_answer('CultureInfo.InvariantCulture'))
+        self.assertTrue(is_supported_format_string_answer('"User: {0}"'))
+        self.assertFalse(is_supported_format_string_answer('string.Format("{0}", value)'))
+
+    def test_accepts_string_literal_blank_for_format_string_topic(self):
+        generated = {
+            'variants': [
+                {
+                    'problem_type': 'line_selection',
+                    'hint': make_structured_hint(1, 1, 1),
+                    'files': [
+                        {'filename': 'Logger.cs', 'content': 'var input = request.Name;\nvar format = input;\nlogger.Write(format);'},
+                        {'filename': 'PracticeProblem.csproj', 'content': '<Project></Project>'},
+                    ],
+                    'answers': [
+                        {'filename': 'Logger.cs', 'line': 1, 'code': 'var input = request.Name;', 'role': 'source'},
+                        {'filename': 'Logger.cs', 'line': 2, 'code': 'var format = input;', 'role': 'validation_failure'},
+                        {'filename': 'Logger.cs', 'line': 3, 'code': 'logger.Write(format);', 'role': 'sink'},
+                    ],
+                },
+                {
+                    'problem_type': 'secure_blank',
+                    'hint': '힌트',
+                    'files': [
+                        {'filename': 'Logger.cs', 'content': 'const string SafeFormat = ____;'},
+                        {'filename': 'PracticeProblem.csproj', 'content': '<Project></Project>'},
+                    ],
+                    'answers': [{
+                        'filename': 'Logger.cs', 'line': 1, 'answer': '"User: {0}"',
+                        'hint': '외부 입력과 분리된 고정 출력 형식을 입력하세요.',
+                    }],
+                },
+            ],
+        }
+
+        variants = validate_generated_variants(generated, 1, 'C#', '포맷 스트링 삽입')
+
+        self.assertEqual(variants[1]['answers'][0]['answer_kind'], 'expression')
+
+    def test_builds_recoverable_draft_from_invalid_candidate(self):
+        generated = {
+            'project_type': 'aspnet_mvc5',
+            'variants': [{
+                'problem_type': 'secure_blank',
+                'hint': '',
+                'files': [{'filename': 'Logger.cs', 'content': 'var format = ____;'}],
+                'answers': [{'filename': 'Logger.cs', 'line': 1, 'answer': 'string.Format("{0}", value)'}],
+            }],
+        }
+
+        draft = build_recoverable_generation_draft(generated)
+
+        self.assertEqual(draft['project_type'], 'aspnet_mvc5')
+        self.assertEqual(draft['variants'][0]['files'][0]['filename'], 'Logger.cs')
+        self.assertEqual(draft['variants'][0]['answers'][0]['line'], 1)
 
     def test_corrects_generated_blank_answer_line_from_code(self):
         variant = {
