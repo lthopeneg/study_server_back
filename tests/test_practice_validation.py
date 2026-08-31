@@ -838,6 +838,10 @@ class PracticeValidationTests(unittest.TestCase):
             self.assertIn('type2_secure_blank/buffer.py', names)
             self.assertIn('type2_secure_blank/hint.txt', names)
             self.assertIn('type2_secure_blank/answers.txt', names)
+            problem_info = zip_file.read('problem_info.txt').decode('utf-8-sig')
+            self.assertIn('언어: Python', problem_info)
+            self.assertIn('대주제: 입력데이터 검증 및 표현', problem_info)
+            self.assertIn('소주제: 메모리 버퍼 오버플로우', problem_info)
             answers = zip_file.read('type2_secure_blank/answers.txt').decode('utf-8-sig')
             self.assertIn('BUFFER_SIZE', answers)
 
