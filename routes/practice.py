@@ -468,7 +468,11 @@ def build_problem_archive(problem_set):
             'aspnet_core_web_api': 'ASP.NET Core Web API',
             'aspnet_mvc5': 'ASP.NET MVC 5', 'aspnet_web_api2': 'ASP.NET Web API 2',
         }
-        metadata_lines = [f'언어: {problem_set.language}']
+        metadata_lines = [
+            f'언어: {problem_set.language}',
+            f'대주제: {problem_set.major_topic}',
+            f'소주제: {problem_set.minor_topic}',
+        ]
         if problem_set.language == 'C#':
             runtime_platform = getattr(problem_set, 'runtime_platform', None)
             project_type = getattr(problem_set, 'project_type', None)
