@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 from pathlib import Path
 
 from openai import OpenAI
@@ -9,6 +10,18 @@ from openai import OpenAI
 TEXT_EXTENSIONS = {'.md', '.txt'}
 MAX_REFERENCE_CHARS = 30_000
 MAX_REFERENCE_FILE_BYTES = 1_000_000
+SCENARIO_DOMAINS = (
+    '은행의 이상 거래 탐지 및 계좌 보호 업무',
+    '병원의 검사 결과 수신 및 의료 장비 연계 업무',
+    '스마트 공장의 생산 설비 원격 제어 및 상태 수집 업무',
+    '공공기관의 전자 민원 및 첨부 문서 처리 업무',
+    '교육기관의 과제 제출 및 학습 기록 관리 업무',
+    '기업의 인사 정보 및 사내 계정 관리 업무',
+    '보안 관제 센터의 이벤트 수집 및 분석 업무',
+    '에너지 사업자의 원격 계량기 데이터 수집 업무',
+    '교통 운영 기관의 신호 장비 및 운행 정보 처리 업무',
+    '연구기관의 실험 장비 데이터 수집 및 분석 업무',
+)
 
 
 def _apply_blank_target_rule(extra_request, target_blank_count):
@@ -279,6 +292,8 @@ def generate_scenario_draft(**conditions):
         if conditions['language'] == 'Python'
         else '.NET Framework 기반 ASP.NET MVC 5 또는 ASP.NET Web API 2 환경'
     )
+    scenario_seed = conditions['scenario_seed'].strip()
+    assigned_domain = '사용자 입력을 우선함' if scenario_seed else secrets.choice(SCENARIO_DOMAINS)
     prompt = f'''시큐어코딩 실습 문제를 만들기 위한 관리자 입력 초안을 작성하세요.
 
 [선택 조건]
@@ -289,12 +304,14 @@ def generate_scenario_draft(**conditions):
 - 난이도: {conditions['difficulty']}
 - 유형별 최소 파일 수: {conditions['minimum_files']}
 - 2유형 목표 빈칸 수: {conditions['target_blank_count']}
-- 사용자가 입력한 시나리오 키워드 또는 초안: {conditions['scenario_seed'] or '없음'}
+- 사용자가 입력한 시나리오 키워드 또는 초안: {scenario_seed or '없음'}
 - 사용자가 입력한 추가 조건: {conditions['extra_request_seed'] or '없음'}
+- 서버가 지정한 업무 분야: {assigned_domain}
 
 [작성 규칙]
-- 입력이 `쇼핑몰 API`처럼 짧으면 해당 키워드를 중심으로 현실적인 서비스 목적, 외부 입력, 처리 계층과 보안약점 발생 흐름이 드러나는 구체적인 시나리오로 확장합니다.
-- 입력이 비어 있으면 선택한 언어와 소주제에 적합한 새로운 업무 상황을 만듭니다.
+- 입력이 짧으면 해당 키워드를 중심으로 현실적인 서비스 목적, 외부 입력, 처리 계층과 보안약점 발생 흐름이 드러나는 구체적인 시나리오로 확장합니다.
+- 입력이 비어 있으면 반드시 서버가 지정한 업무 분야를 중심으로 새로운 업무 상황을 만듭니다.
+- 입력이 비어 있을 때 온라인 쇼핑몰, 상품 등록, 상품 이미지, 주문 또는 배송 업무로 바꾸지 않습니다.
 - 입력이 이미 상세하면 핵심 의도를 보존하면서 빠진 데이터 흐름과 업무 맥락만 보완합니다.
 - scenario는 문제의 배경과 기능을 설명합니다. 정답 위치나 해결 코드를 노출하지 않습니다.
 - extra_request는 문제 제작 조건만 작성하고 시나리오를 반복하지 않습니다.

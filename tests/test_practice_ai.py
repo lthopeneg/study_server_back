@@ -64,6 +64,33 @@ class PracticeAiTests(unittest.TestCase):
         self.assertIn('자연스럽게 만들 수 없다면 더 적게', result['extra_request'])
         self.assertIn('한글 주석', result['extra_request'])
 
+    @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
+    @patch('services.practice_ai.secrets.choice', return_value='보안 관제 센터의 이벤트 수집 및 분석 업무')
+    @patch('services.practice_ai.OpenAI')
+    def test_assigns_non_commerce_domain_when_scenario_is_empty(
+        self, openai_class, choice, _collect_context,
+    ):
+        client = MagicMock()
+        client.responses.create.return_value = SimpleNamespace(output_text=json.dumps({
+            'scenario': '보안 관제 센터가 외부 장비의 이벤트 데이터를 수신합니다.',
+            'extra_request': '두 유형의 데이터 흐름을 일관되게 구성합니다.',
+        }))
+        openai_class.return_value = client
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
+            result = generate_scenario_draft(
+                language='Python', major_topic='입력데이터 검증 및 표현',
+                minor_topic='메모리 버퍼 오버플로우', difficulty='beginner',
+                minimum_files=3, target_blank_count=3, scenario_seed='',
+                extra_request_seed='', reference_scope='latest', model='gpt-5.6-luna',
+            )
+
+        self.assertIn('보안 관제', result['scenario'])
+        choice.assert_called_once()
+        request = client.responses.create.call_args.kwargs['input']
+        self.assertIn('서버가 지정한 업무 분야: 보안 관제 센터', request)
+        self.assertIn('온라인 쇼핑몰, 상품 등록, 상품 이미지, 주문 또는 배송 업무로 바꾸지 않습니다.', request)
+
     @patch('services.practice_ai.OpenAI')
     def test_reviews_generated_problem_quality(self, openai_class):
         client = MagicMock()
