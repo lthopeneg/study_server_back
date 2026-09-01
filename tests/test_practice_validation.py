@@ -1,3 +1,4 @@
+import json
 import unittest
 import zipfile
 from types import SimpleNamespace
@@ -831,18 +832,29 @@ class PracticeValidationTests(unittest.TestCase):
 
         with zipfile.ZipFile(archive) as zip_file:
             names = set(zip_file.namelist())
-            self.assertIn('type1_line_selection/buffer.py', names)
-            self.assertIn('problem_info.txt', names)
-            self.assertIn('type1_line_selection/hint.txt', names)
-            self.assertIn('type1_line_selection/answers.txt', names)
-            self.assertIn('type2_secure_blank/buffer.py', names)
-            self.assertIn('type2_secure_blank/hint.txt', names)
-            self.assertIn('type2_secure_blank/answers.txt', names)
-            problem_info = zip_file.read('problem_info.txt').decode('utf-8-sig')
+            root = 'practice_problems/python/problem_0012'
+            self.assertIn(f'{root}/type_1/files/buffer.py', names)
+            self.assertIn(f'{root}/problem_info.txt', names)
+            self.assertIn(f'{root}/problem.json', names)
+            self.assertIn(f'{root}/type_1/hint.txt', names)
+            self.assertIn(f'{root}/type_1/answers.txt', names)
+            self.assertIn(f'{root}/type_1/answers.json', names)
+            self.assertIn(f'{root}/type_2/files/buffer.py', names)
+            self.assertIn(f'{root}/type_2/hint.txt', names)
+            self.assertIn(f'{root}/type_2/answers.txt', names)
+            self.assertIn(f'{root}/type_2/answers.json', names)
+            problem_info = zip_file.read(f'{root}/problem_info.txt').decode('utf-8-sig')
             self.assertIn('언어: Python', problem_info)
             self.assertIn('대주제: 입력데이터 검증 및 표현', problem_info)
             self.assertIn('소주제: 메모리 버퍼 오버플로우', problem_info)
-            answers = zip_file.read('type2_secure_blank/answers.txt').decode('utf-8-sig')
+            metadata = json.loads(zip_file.read(f'{root}/problem.json'))
+            self.assertEqual(metadata['schema_version'], 1)
+            self.assertEqual(metadata['problem_id'], 12)
+            self.assertEqual(metadata['title'], '내부 제목')
+            self.assertEqual(metadata['language'], 'Python')
+            answers_json = json.loads(zip_file.read(f'{root}/type_2/answers.json'))
+            self.assertEqual(answers_json[0]['answer'], 'BUFFER_SIZE')
+            answers = zip_file.read(f'{root}/type_2/answers.txt').decode('utf-8-sig')
             self.assertIn('BUFFER_SIZE', answers)
 
     def test_grades_complete_problem_submission(self):
