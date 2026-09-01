@@ -272,22 +272,19 @@ def validate_variant(raw_variant, expected_type):
                 return None, error
             if '\n' in answer_text or '\r' in answer_text:
                 return None, '빈칸 정답에는 줄바꿈을 사용할 수 없습니다.'
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', answer_text):
+                return None, (
+                    '빈칸 정답은 함수명, 메서드명, 변수명, 상수 또는 클래스명 같은 '
+                    '영문 단일 식별자여야 합니다.'
+                )
             answer['answer'] = answer_text
-            answer['answer_kind'] = 'identifier' if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', answer_text) else 'expression'
+            answer['answer_kind'] = 'identifier'
             answer['completed_line'] = BLANK_PATTERN.sub(answer_text, answer_line, count=1)
         answers.append(answer)
 
     if not answers:
         return None, '각 문제 유형에 정답을 하나 이상 지정해주세요.'
     return {'problem_type': expected_type, 'hint': hint, 'files': files, 'answers': answers}, None
-
-
-def is_supported_format_string_answer(answer_text):
-    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', answer_text):
-        return True
-    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+', answer_text):
-        return True
-    return bool(re.fullmatch(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', answer_text))
 
 
 def build_recoverable_generation_draft(generated):
@@ -965,17 +962,11 @@ def validate_generated_variants(generated, minimum_files, language='Python', min
             invalid_answers = [
                 answer for answer in variant['answers']
                 if answer.get('answer_kind') != 'identifier'
-                and not (
-                    '포맷 스트링' in minor_topic
-                    and is_supported_format_string_answer(answer.get('answer', ''))
-                )
             ]
             if invalid_answers:
-                if '포맷 스트링' in minor_topic:
-                    raise ValueError(
-                        '포맷 스트링 빈칸 정답은 단일 식별자, 문자열 리터럴 또는 단순 멤버 접근이어야 합니다.'
-                    )
-                raise ValueError('AI 빈칸 정답은 함수명, 변수명 또는 상수 같은 단일 식별자여야 합니다.')
+                raise ValueError(
+                    'AI 빈칸 정답은 함수명, 메서드명, 변수명, 상수 또는 클래스명 같은 단일 식별자여야 합니다.'
+                )
         validated_variants.append({
             'problem_type': variant['problem_type'],
             'hint': variant['hint'],

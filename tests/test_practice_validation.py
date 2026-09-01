@@ -30,7 +30,6 @@ from routes.practice import (
     validate_csharp_project_dependencies,
     validate_memory_buffer_answer_quality,
     validate_memory_buffer_security,
-    is_supported_format_string_answer,
     validate_python_generated_syntax,
     validate_variant,
 )
@@ -343,6 +342,19 @@ class PracticeValidationTests(unittest.TestCase):
         self.assertIsNone(variant)
         self.assertIn('언더바 4개', error)
 
+    def test_rejects_non_identifier_blank_answer_for_manual_problem(self):
+        variant, error = validate_variant(
+            {
+                'problem_type': 'secure_blank',
+                'files': [{'filename': 'a.py', 'content': 'value = ____', 'hint': ''}],
+                'answers': [{'filename': 'a.py', 'line': 1, 'answer': 're.fullmatch'}],
+            },
+            'secure_blank',
+        )
+
+        self.assertIsNone(variant)
+        self.assertIn('단일 식별자', error)
+
     def test_applies_one_hint_to_all_files_in_variant(self):
         variant, error = validate_variant(
             {
@@ -476,7 +488,7 @@ class PracticeValidationTests(unittest.TestCase):
                     'problem_type': 'secure_blank',
                     'hint': '힌트',
                     'files': [{'filename': 'app.py', 'content': 'value = ____'}],
-                    'answers': [{'filename': 'app.py', 'line': 1, 'answer': 'input()'}],
+                    'answers': [{'filename': 'app.py', 'line': 1, 'answer': 'input'}],
                 },
             ],
         }
@@ -512,13 +524,7 @@ class PracticeValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '단일 식별자'):
             validate_generated_variants(generated, 1)
 
-    def test_accepts_limited_format_string_answer_elements(self):
-        self.assertTrue(is_supported_format_string_answer('SafeFormat'))
-        self.assertTrue(is_supported_format_string_answer('CultureInfo.InvariantCulture'))
-        self.assertTrue(is_supported_format_string_answer('"User: {0}"'))
-        self.assertFalse(is_supported_format_string_answer('string.Format("{0}", value)'))
-
-    def test_accepts_string_literal_blank_for_format_string_topic(self):
+    def test_rejects_string_literal_blank_for_format_string_topic(self):
         generated = {
             'variants': [
                 {
@@ -549,9 +555,8 @@ class PracticeValidationTests(unittest.TestCase):
             ],
         }
 
-        variants = validate_generated_variants(generated, 1, 'C#', '포맷 스트링 삽입')
-
-        self.assertEqual(variants[1]['answers'][0]['answer_kind'], 'expression')
+        with self.assertRaisesRegex(ValueError, '단일 식별자'):
+            validate_generated_variants(generated, 1, 'C#', '포맷 스트링 삽입')
 
     def test_builds_recoverable_draft_from_invalid_candidate(self):
         generated = {
