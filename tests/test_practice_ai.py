@@ -148,6 +148,8 @@ class PracticeAiTests(unittest.TestCase):
         prompt = client.responses.create.call_args.kwargs['input']
         self.assertIn('원본 데이터 길이 검사가 누락', prompt)
         self.assertIn('기존 JSON', prompt)
+        self.assertIn('영문 단일 식별자 하나만', prompt)
+        self.assertIn('문자열 리터럴은 정답으로 사용하지 않습니다', prompt)
 
     @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
     @patch('services.practice_ai.OpenAI')
@@ -181,6 +183,8 @@ class PracticeAiTests(unittest.TestCase):
         self.assertIn('Sink까지 전달되는 값의 유입 라인만', request['input'])
         self.assertIn('answers 배열의 첫 번째 빈칸', request['input'])
         self.assertIn('가장 핵심적인 함수·메서드·조건 요소', request['input'])
+        self.assertIn('점, 공백, 따옴표, 괄호 또는 연산자', request['input'])
+        self.assertIn('고정 문자열이 필요하면 별도의 이름 있는 상수', request['input'])
 
     @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
     @patch('services.practice_ai.OpenAI')
