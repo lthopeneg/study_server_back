@@ -852,6 +852,8 @@ class PracticeValidationTests(unittest.TestCase):
             self.assertEqual(metadata['problem_id'], 12)
             self.assertEqual(metadata['title'], '내부 제목')
             self.assertEqual(metadata['language'], 'Python')
+            self.assertEqual(metadata['variants']['type_1']['problem_type'], 'line_selection')
+            self.assertEqual(metadata['variants']['type_1']['files'], ['buffer.py'])
             answers_json = json.loads(zip_file.read(f'{root}/type_2/answers.json'))
             self.assertEqual(answers_json[0]['answer'], 'BUFFER_SIZE')
             answers = zip_file.read(f'{root}/type_2/answers.txt').decode('utf-8-sig')
