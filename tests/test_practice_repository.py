@@ -5,7 +5,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from extensions import db
-from models import PracticeProblemSet, User
+from models import PracticeProblemSet, PracticeProblemSyncState, User
 from schema_migrations import apply_schema_migrations
 from services.practice_repository import (
     PracticeRepositoryError,
@@ -72,13 +72,47 @@ class PracticeRepositoryTests(unittest.TestCase):
             self.assertEqual(problem.managed_by, 'git')
             self.assertEqual(problem.source_key, 'python/problem_0012')
 
+            problem.title = '홈페이지에서 수정한 제목'
+            db.session.commit()
             with patch('services.practice_repository.append_problem_variants'):
                 second_result = sync_practice_repository(self.root)
             self.assertEqual(second_result['skipped'], ['python/problem_0012'])
             self.assertEqual(second_result['created'], [])
             self.assertEqual(second_result['updated'], [])
+            self.assertEqual(
+                db.session.get(PracticeProblemSet, 12).title,
+                '홈페이지에서 수정한 제목',
+            )
+            sync_state = db.session.get(PracticeProblemSyncState, 'python/problem_0012')
+            self.assertEqual(sync_state.last_problem_id, 12)
             db.session.remove()
             db.drop_all()
+            db.engine.dispose()
+
+    def test_does_not_recreate_web_deleted_problem_when_git_is_unchanged(self):
+        app = Flask(__name__)
+        app.config.update(
+            SQLALCHEMY_DATABASE_URI='sqlite:///:memory:',
+            SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        )
+        db.init_app(app)
+        with app.app_context():
+            db.create_all()
+            repository_problem = load_practice_repository(self.root)[0]
+            db.session.add(PracticeProblemSyncState(
+                source_key=repository_problem.source_key,
+                source_revision=repository_problem.source_revision,
+                last_problem_id=12,
+            ))
+            db.session.commit()
+
+            result = sync_practice_repository(self.root)
+
+            self.assertEqual(result['skipped'], ['python/problem_0012'])
+            self.assertIsNone(db.session.get(PracticeProblemSet, 12))
+            db.session.remove()
+            db.drop_all()
+            db.engine.dispose()
 
     def test_schema_migration_is_idempotent_when_unique_constraint_exists(self):
         app = Flask(__name__)
@@ -93,6 +127,7 @@ class PracticeRepositoryTests(unittest.TestCase):
             apply_schema_migrations()
             db.session.remove()
             db.drop_all()
+            db.engine.dispose()
 
 
 if __name__ == '__main__':

@@ -1595,8 +1595,6 @@ def update_problem_set(problem_set_id):
 
     for field in ('title', 'scenario', 'language', 'runtime_platform', 'project_type', 'major_topic', 'minor_topic', 'difficulty', 'creation_method'):
         setattr(problem_set, field, payload[field])
-    # Git 관리 문제를 웹에서 임시 수정한 경우 다음 저장소 동기화가 다시 반영되도록 표시합니다.
-    problem_set.source_revision = None
     try:
         problem_set.variants.clear()
         db.session.flush()
@@ -1690,7 +1688,6 @@ def update_problem_status(problem_set_id):
         return jsonify({'status': 'error', 'message': '문제 세트를 찾을 수 없습니다.'}), 404
 
     problem_set.status = status
-    problem_set.source_revision = None
     try:
         db.session.commit()
     except Exception:
