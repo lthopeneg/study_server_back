@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from extensions import db
-from models import PracticeProblemSet, User
+from models import PracticeProblemSet, PracticeProblemSyncState, User
 from routes.practice import append_problem_variants, validate_problem_set_payload
 
 
@@ -196,8 +196,17 @@ def sync_practice_repository(root, admin_login=None, dry_run=False):
     admin = None
     try:
         for repository_problem in repository_problems:
+            sync_state = db.session.get(PracticeProblemSyncState, repository_problem.source_key)
+            if sync_state and sync_state.source_revision == repository_problem.source_revision:
+                result['skipped'].append(repository_problem.source_key)
+                continue
             problem_set = _find_existing_problem(repository_problem)
             if problem_set and problem_set.source_revision == repository_problem.source_revision:
+                db.session.add(PracticeProblemSyncState(
+                    source_key=repository_problem.source_key,
+                    source_revision=repository_problem.source_revision,
+                    last_problem_id=problem_set.id,
+                ))
                 result['skipped'].append(repository_problem.source_key)
                 continue
             payload = repository_problem.payload
@@ -221,6 +230,12 @@ def sync_practice_repository(root, admin_login=None, dry_run=False):
             problem_set.source_revision = repository_problem.source_revision
             problem_set.managed_by = 'git'
             append_problem_variants(problem_set, payload['variants'])
+            db.session.flush()
+            if sync_state is None:
+                sync_state = PracticeProblemSyncState(source_key=repository_problem.source_key)
+                db.session.add(sync_state)
+            sync_state.source_revision = repository_problem.source_revision
+            sync_state.last_problem_id = problem_set.id
 
         if dry_run:
             db.session.rollback()

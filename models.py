@@ -79,3 +79,16 @@ class PracticeProblemFile(db.Model):
     __table_args__ = (
         db.UniqueConstraint('variant_id', 'filename', name='uq_problem_variant_filename'),
     )
+
+
+class PracticeProblemSyncState(db.Model):
+    __tablename__ = 'practice_problem_sync_states'
+    source_key = db.Column(db.String(255), primary_key=True)
+    source_revision = db.Column(db.String(64), nullable=False)
+    last_problem_id = db.Column(db.BigInteger, nullable=True)
+    synced_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        server_default=db.func.now(),
+        onupdate=db.func.now(),
+    )
