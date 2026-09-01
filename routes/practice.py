@@ -457,9 +457,12 @@ def append_problem_variants(problem_set, validated_variants):
 def build_problem_archive(problem_set):
     archive = io.BytesIO()
     folder_names = {
-        'line_selection': 'type1_line_selection',
-        'secure_blank': 'type2_secure_blank',
+        'line_selection': 'type_1',
+        'secure_blank': 'type_2',
     }
+    language_folders = {'Python': 'python', 'C#': 'csharp'}
+    language_folder = language_folders.get(problem_set.language, problem_set.language.lower())
+    problem_folder = f'practice_problems/{language_folder}/problem_{problem_set.id:04d}'
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zip_file:
         platform_labels = {'dotnet': '.NET', 'dotnet_framework': '.NET Framework'}
         project_labels = {
@@ -480,21 +483,47 @@ def build_problem_archive(problem_set):
                 f'실행 환경: {platform_labels.get(runtime_platform, "미지정")}',
                 f'프로젝트 유형: {project_labels.get(project_type, "미지정")}',
             ])
-        zip_file.writestr('problem_info.txt', '\n'.join(metadata_lines).encode('utf-8-sig'))
+        zip_file.writestr(
+            f'{problem_folder}/problem_info.txt',
+            '\n'.join(metadata_lines).encode('utf-8-sig'),
+        )
+        problem_metadata = {
+            'schema_version': 1,
+            'problem_id': problem_set.id,
+            'title': problem_set.title,
+            'language': problem_set.language,
+            'runtime_platform': getattr(problem_set, 'runtime_platform', None),
+            'project_type': getattr(problem_set, 'project_type', None),
+            'major_topic': problem_set.major_topic,
+            'minor_topic': problem_set.minor_topic,
+            'difficulty': problem_set.difficulty,
+            'status': problem_set.status,
+            'creation_method': problem_set.creation_method,
+            'scenario': problem_set.scenario or '',
+        }
+        zip_file.writestr(
+            f'{problem_folder}/problem.json',
+            json.dumps(problem_metadata, ensure_ascii=False, indent=2).encode('utf-8'),
+        )
         for variant in sorted(problem_set.variants, key=lambda item: item.problem_type):
             folder = folder_names.get(variant.problem_type)
             if not folder:
                 continue
+            variant_folder = f'{problem_folder}/{folder}'
             files = sorted(variant.files, key=lambda item: (item.display_order, getattr(item, 'id', 0) or 0))
             for item in files:
-                zip_file.writestr(f'{folder}/{item.filename}', item.content.encode('utf-8'))
+                zip_file.writestr(f'{variant_folder}/files/{item.filename}', item.content.encode('utf-8'))
 
             hint = files[0].hint if files else ''
-            zip_file.writestr(f'{folder}/hint.txt', (hint or '').encode('utf-8-sig'))
+            zip_file.writestr(f'{variant_folder}/hint.txt', (hint or '').encode('utf-8-sig'))
             try:
                 answers = json.loads(variant.answers_json)
             except (TypeError, json.JSONDecodeError):
                 answers = []
+            zip_file.writestr(
+                f'{variant_folder}/answers.json',
+                json.dumps(answers, ensure_ascii=False, indent=2).encode('utf-8'),
+            )
             if variant.problem_type == 'line_selection':
                 grouped = {}
                 for answer in answers:
@@ -508,7 +537,10 @@ def build_problem_archive(problem_set):
                     f'{answer.get("filename", "")} - {answer.get("line")}번 라인 정답: {answer.get("answer", "")}'
                     for answer in answers
                 ]
-            zip_file.writestr(f'{folder}/answers.txt', '\n'.join(answer_lines).encode('utf-8-sig'))
+            zip_file.writestr(
+                f'{variant_folder}/answers.txt',
+                '\n'.join(answer_lines).encode('utf-8-sig'),
+            )
     archive.seek(0)
     return archive
 
