@@ -58,13 +58,17 @@ jobs:
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
             docker pull $IMAGE_URL
+
+            # Docker가 root 소유로 자동 생성하지 않도록 배포 계정으로 마운트 경로를 준비합니다.
+            mkdir -p /home/ubuntu/practice_problems
             
             docker stop study-back-app || true
             docker rm study-back-app || true
             
-            # 백엔드는 서버의 5000번 포트와 연결하며, research_note 폴더를 마운트합니다.
+            # 연구 노트와 Git에서 관리하는 실습 문제를 읽기 전용으로 마운트합니다.
             docker run -d -p 5000:5000 \
               -v /home/ubuntu/research_note:/home/ubuntu/research_note \
+              -v /home/ubuntu/practice_problems:/data/practice_problems:ro \
               -e DB_USER=${{ secrets.DB_USER }} \
               -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
               -e DB_HOST=${{ secrets.DB_HOST }} \

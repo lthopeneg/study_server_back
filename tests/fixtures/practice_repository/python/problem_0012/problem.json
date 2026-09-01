@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "problem_id": 12,
+  "title": "저장소 동기화 테스트",
+  "language": "Python",
+  "runtime_platform": null,
+  "project_type": null,
+  "major_topic": "입력데이터 검증 및 표현",
+  "minor_topic": "SQL 삽입",
+  "difficulty": "beginner",
+  "status": "published",
+  "creation_method": "ai",
+  "scenario": "외부 입력을 처리합니다.",
+  "variants": {
+    "type_1": {
+      "problem_type": "line_selection",
+      "files": ["app.py"]
+    },
+    "type_2": {
+      "problem_type": "secure_blank",
+      "files": ["app.py"]
+    }
+  }
+}

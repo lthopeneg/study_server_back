@@ -1,0 +1,2 @@
+value = input()
+execute(value)
