@@ -13,9 +13,11 @@ from routes.practice import practice_bp
 # 테이블 생성을 위해 모델 임포트 (app_context보다 위에서 호출 필수)
 import models 
 from schema_migrations import apply_schema_migrations
+from runtime_safety import database_engine_options, install_request_logging
 
 load_dotenv()
 app = Flask(__name__)
+install_request_logging(app)
 CORS(app, supports_credentials=True)
 
 # --- 1. 설정 (Config) ---
@@ -35,6 +37,7 @@ if not DB_PORT:
 DB_NAME = os.getenv("DB_NAME")
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = database_engine_options(app.config['SQLALCHEMY_DATABASE_URI'])
 
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
