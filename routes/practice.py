@@ -4,6 +4,7 @@ import io
 import re
 import zipfile
 import uuid
+from datetime import datetime, timezone
 from collections import Counter
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -1605,6 +1606,7 @@ def submit_published_problem_set(problem_set_id):
         is_correct=result['correct'],
         line_selection_correct=result_by_type['line_selection']['correct'],
         secure_blank_correct=result_by_type['secure_blank']['correct'],
+        attempted_at=datetime.now(timezone.utc).replace(tzinfo=None),
     ))
     try:
         db.session.commit()
