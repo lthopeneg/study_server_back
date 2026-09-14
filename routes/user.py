@@ -1,9 +1,10 @@
 import re
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import case
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db, limiter
-from models import User
+from models import PracticeProblemAttempt, PracticeProblemSet, User
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
 
@@ -30,6 +31,91 @@ def get_profile():
             "created_at": user.created_at.strftime("%Y-%m-%d") if user.created_at else ""
         }
     }), 200
+
+
+def build_learning_progress(user_id, language=None):
+    published_query = PracticeProblemSet.query.filter_by(status='published')
+    if language:
+        published_query = published_query.filter_by(language=language)
+    published = published_query.order_by(PracticeProblemSet.id.desc()).all()
+    published_ids = {item.id for item in published}
+
+    attempts_query = PracticeProblemAttempt.query.filter_by(user_id=user_id)
+    if language:
+        attempts_query = attempts_query.filter_by(language=language)
+    total_attempts = attempts_query.count()
+    recent = attempts_query.order_by(PracticeProblemAttempt.attempted_at.desc()).limit(10).all()
+
+    per_problem = {}
+    if published_ids:
+        aggregate_query = db.session.query(
+            PracticeProblemAttempt.problem_set_id,
+            db.func.count(PracticeProblemAttempt.id),
+            db.func.max(PracticeProblemAttempt.attempted_at),
+            db.func.max(case((PracticeProblemAttempt.is_correct.is_(True), 1), else_=0)),
+        ).filter(
+            PracticeProblemAttempt.user_id == user_id,
+            PracticeProblemAttempt.problem_set_id.in_(published_ids),
+        )
+        if language:
+            aggregate_query = aggregate_query.filter(PracticeProblemAttempt.language == language)
+        for problem_id, attempt_count, last_attempted_at, completed in aggregate_query.group_by(PracticeProblemAttempt.problem_set_id):
+            per_problem[problem_id] = {
+                'attempt_count': attempt_count,
+                'completed': bool(completed),
+                'last_attempted_at': last_attempted_at.isoformat() if last_attempted_at else None,
+            }
+
+    language_stats = {}
+    for item in published:
+        stats = language_stats.setdefault(item.language, {
+            'total': 0, 'attempted': 0, 'completed': 0,
+        })
+        stats['total'] += 1
+        progress = per_problem.get(item.id)
+        if progress:
+            stats['attempted'] += 1
+            if progress['completed']:
+                stats['completed'] += 1
+
+    completed = sum(1 for item in per_problem.values() if item['completed'])
+    return {
+        'summary': {
+            'total_problems': len(published),
+            'attempted_problems': len(per_problem),
+            'completed_problems': completed,
+            'completion_rate': round(completed * 100 / len(published)) if published else 0,
+            'total_attempts': total_attempts,
+        },
+        'by_language': language_stats,
+        'per_problem': {str(problem_id): value for problem_id, value in per_problem.items()},
+        'recent_attempts': [{
+            'id': item.id,
+            'problem_id': item.problem_set_id,
+            'problem_title': item.problem_title,
+            'language': item.language,
+            'major_topic': item.major_topic,
+            'minor_topic': item.minor_topic,
+            'difficulty': item.difficulty,
+            'correct': item.is_correct,
+            'line_selection_correct': item.line_selection_correct,
+            'secure_blank_correct': item.secure_blank_correct,
+            'attempted_at': item.attempted_at.isoformat() if item.attempted_at else None,
+            'problem_available': item.problem_set_id in published_ids,
+        } for item in recent],
+    }
+
+
+@user_bp.route('/learning-progress', methods=['GET'])
+@jwt_required()
+def get_learning_progress():
+    language = request.args.get('language')
+    if language not in {None, 'Python', 'C#'}:
+        return jsonify({'status': 'error', 'message': '지원하지 않는 언어입니다.'}), 400
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user:
+        return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'data': build_learning_progress(user.id, language)})
 
 # [API] 비밀번호 변경
 @user_bp.route('/password', methods=['PUT'])
