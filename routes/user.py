@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta, timezone
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import case
@@ -7,6 +8,7 @@ from extensions import db, limiter
 from models import PracticeProblemAttempt, PracticeProblemSet, User
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
+KOREA_TIMEZONE = timezone(timedelta(hours=9), name='KST')
 
 def is_valid_password(password):
     return re.match(r'^(?=.*[a-zA-Z])(?=.*\d)(?=.*[\W_]).{8,}$', password) is not None
@@ -63,20 +65,62 @@ def build_learning_progress(user_id, language=None):
             per_problem[problem_id] = {
                 'attempt_count': attempt_count,
                 'completed': bool(completed),
-                'last_attempted_at': last_attempted_at.isoformat() if last_attempted_at else None,
+                'last_attempted_at': to_korea_iso(last_attempted_at),
             }
 
     language_stats = {}
     for item in published:
         stats = language_stats.setdefault(item.language, {
-            'total': 0, 'attempted': 0, 'completed': 0,
+            'total_problems': 0,
+            'attempted_problems': 0,
+            'completed_problems': 0,
+            '_major_topics': {},
         })
-        stats['total'] += 1
+        stats['total_problems'] += 1
         progress = per_problem.get(item.id)
         if progress:
-            stats['attempted'] += 1
+            stats['attempted_problems'] += 1
             if progress['completed']:
-                stats['completed'] += 1
+                stats['completed_problems'] += 1
+        major = stats['_major_topics'].setdefault(item.major_topic, {})
+        topic = major.setdefault(item.minor_topic, {
+            'name': item.minor_topic,
+            'total_problems': 0,
+            'completed_problems': 0,
+        })
+        topic['total_problems'] += 1
+        if progress and progress['completed']:
+            topic['completed_problems'] += 1
+
+    total_topics = 0
+    completed_topics = 0
+    # Convert the internal topic maps to a stable, UI-friendly hierarchy.
+    for stats in language_stats.values():
+        raw_majors = stats.pop('_major_topics')
+        major_topics = []
+        language_total_topics = 0
+        language_completed_topics = 0
+        for major_name in sorted(raw_majors):
+            topics = []
+            for minor_name in sorted(raw_majors[major_name]):
+                topic = raw_majors[major_name][minor_name]
+                topic['completed'] = topic['completed_problems'] > 0
+                topics.append(topic)
+            major_completed = sum(1 for topic in topics if topic['completed'])
+            language_total_topics += len(topics)
+            language_completed_topics += major_completed
+            major_topics.append({
+                'name': major_name,
+                'total_topics': len(topics),
+                'completed_topics': major_completed,
+                'topics': topics,
+            })
+        stats['total_topics'] = language_total_topics
+        stats['completed_topics'] = language_completed_topics
+        stats['completion_rate'] = round(language_completed_topics * 100 / language_total_topics) if language_total_topics else 0
+        stats['major_topics'] = major_topics
+        total_topics += language_total_topics
+        completed_topics += language_completed_topics
 
     completed = sum(1 for item in per_problem.values() if item['completed'])
     return {
@@ -84,7 +128,9 @@ def build_learning_progress(user_id, language=None):
             'total_problems': len(published),
             'attempted_problems': len(per_problem),
             'completed_problems': completed,
-            'completion_rate': round(completed * 100 / len(published)) if published else 0,
+            'total_topics': total_topics,
+            'completed_topics': completed_topics,
+            'completion_rate': round(completed_topics * 100 / total_topics) if total_topics else 0,
             'total_attempts': total_attempts,
         },
         'by_language': language_stats,
@@ -100,10 +146,18 @@ def build_learning_progress(user_id, language=None):
             'correct': item.is_correct,
             'line_selection_correct': item.line_selection_correct,
             'secure_blank_correct': item.secure_blank_correct,
-            'attempted_at': item.attempted_at.isoformat() if item.attempted_at else None,
+            'attempted_at': to_korea_iso(item.attempted_at),
             'problem_available': item.problem_set_id in published_ids,
         } for item in recent],
     }
+
+
+def to_korea_iso(value):
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(KOREA_TIMEZONE).isoformat()
 
 
 @user_bp.route('/learning-progress', methods=['GET'])

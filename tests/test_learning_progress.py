@@ -21,6 +21,7 @@ class LearningProgressTestCase(unittest.TestCase):
             PracticeProblemSet(id=10, title='Python 문제', language='Python', major_topic='입력 검증', minor_topic='경계 검사', difficulty='beginner', creation_method='manual', status='published', managed_by='web', created_by=1),
             PracticeProblemSet(id=11, title='C# 문제', language='C#', major_topic='인증', minor_topic='세션 검사', difficulty='intermediate', creation_method='manual', status='published', managed_by='web', created_by=1),
             PracticeProblemSet(id=12, title='비공개 문제', language='Python', major_topic='기타', minor_topic='기타', difficulty='advanced', creation_method='manual', status='draft', managed_by='web', created_by=1),
+            PracticeProblemSet(id=13, title='Python 문제 2', language='Python', major_topic='입력 검증', minor_topic='길이 검증', difficulty='beginner', creation_method='manual', status='published', managed_by='web', created_by=1),
         ])
         db.session.flush()
         now = datetime(2026, 9, 14, 12, 0, 0)
@@ -49,19 +50,27 @@ class LearningProgressTestCase(unittest.TestCase):
     def test_progress_counts_only_currently_published_problems(self):
         result = build_learning_progress(1)
         self.assertEqual(result['summary'], {
-            'total_problems': 2, 'attempted_problems': 1, 'completed_problems': 1,
-            'completion_rate': 50, 'total_attempts': 3,
+            'total_problems': 3, 'attempted_problems': 1, 'completed_problems': 1,
+            'total_topics': 3, 'completed_topics': 1,
+            'completion_rate': 33, 'total_attempts': 3,
         })
         self.assertEqual(result['per_problem']['10']['attempt_count'], 2)
         self.assertTrue(result['per_problem']['10']['completed'])
         self.assertNotIn('12', result['per_problem'])
         self.assertFalse(result['recent_attempts'][2]['problem_available'])
+        self.assertEqual(result['recent_attempts'][0]['attempted_at'], '2026-09-14T21:00:00+09:00')
+        self.assertEqual(result['by_language']['Python']['completion_rate'], 50)
+        python_topics = result['by_language']['Python']['major_topics'][0]['topics']
+        self.assertEqual([topic['name'] for topic in python_topics], ['경계 검사', '길이 검증'])
+        self.assertTrue(python_topics[0]['completed'])
+        self.assertFalse(python_topics[1]['completed'])
 
     def test_language_filter_limits_summary_and_history(self):
         result = build_learning_progress(1, 'C#')
         self.assertEqual(result['summary']['total_problems'], 1)
         self.assertEqual(result['summary']['total_attempts'], 0)
-        self.assertEqual(result['by_language']['C#']['completed'], 0)
+        self.assertEqual(result['by_language']['C#']['completed_topics'], 0)
+        self.assertEqual(result['by_language']['C#']['completion_rate'], 0)
         self.assertEqual(result['recent_attempts'], [])
 
 
