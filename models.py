@@ -36,6 +36,23 @@ class DailyMainNews(db.Model):
     selection_reason = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
+
+class UserNewsBookmark(db.Model):
+    __tablename__ = 'user_news_bookmarks'
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    item_type = db.Column(db.String(30), nullable=False)
+    news_id = db.Column(db.BigInteger, nullable=False)
+    title = db.Column(db.String(500), nullable=False)
+    url = db.Column(db.String(500), nullable=False)
+    source = db.Column(db.String(100), nullable=True)
+    published_at = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'item_type', 'news_id', name='uq_user_news_bookmark'),
+        db.Index('ix_user_news_bookmark_time', 'user_id', 'created_at'),
+    )
+
 class PracticeProblemSet(db.Model):
     __tablename__ = 'practice_problem_sets'
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)

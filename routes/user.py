@@ -3,9 +3,17 @@ from datetime import timedelta, timezone
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import case
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db, limiter
-from models import PracticeProblemAttempt, PracticeProblemSet, User
+from models import (
+    DailyMainNews,
+    PracticeProblemAttempt,
+    PracticeProblemSet,
+    SecurityNews,
+    User,
+    UserNewsBookmark,
+)
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
 KOREA_TIMEZONE = timezone(timedelta(hours=9), name='KST')
@@ -170,6 +178,104 @@ def get_learning_progress():
     if not user:
         return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
     return jsonify({'status': 'success', 'data': build_learning_progress(user.id, language)})
+
+
+def serialize_news_bookmark(bookmark):
+    return {
+        'id': bookmark.id,
+        'item_type': bookmark.item_type,
+        'news_id': bookmark.news_id,
+        'title': bookmark.title,
+        'url': bookmark.url,
+        'source': bookmark.source,
+        'published_at': bookmark.published_at,
+        'created_at': to_korea_iso(bookmark.created_at),
+    }
+
+
+@user_bp.route('/news-bookmarks', methods=['GET'])
+@jwt_required()
+def get_news_bookmarks():
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user:
+        return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
+    bookmarks = (
+        UserNewsBookmark.query.filter_by(user_id=user.id)
+        .order_by(UserNewsBookmark.created_at.desc(), UserNewsBookmark.id.desc())
+        .all()
+    )
+    return jsonify({'status': 'success', 'data': [serialize_news_bookmark(item) for item in bookmarks]})
+
+
+@user_bp.route('/news-bookmarks', methods=['POST'])
+@jwt_required()
+def create_news_bookmark():
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user:
+        return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
+    data = request.get_json(silent=True) or {}
+    item_type = data.get('item_type')
+    news_id = data.get('news_id')
+    if item_type not in {'security_news', 'daily_main'} or isinstance(news_id, bool) or not isinstance(news_id, int):
+        return jsonify({'status': 'error', 'message': '스크랩할 뉴스 정보가 올바르지 않습니다.'}), 400
+
+    existing = UserNewsBookmark.query.filter_by(
+        user_id=user.id, item_type=item_type, news_id=news_id,
+    ).first()
+    if existing:
+        return jsonify({'status': 'success', 'data': serialize_news_bookmark(existing)}), 200
+
+    if item_type == 'security_news':
+        news = db.session.get(SecurityNews, news_id)
+        if not news:
+            return jsonify({'status': 'error', 'message': '스크랩할 뉴스를 찾을 수 없습니다.'}), 404
+        title, url, source = news.title, news.link, news.source
+        published_at = news.pub_date
+    else:
+        news = db.session.get(DailyMainNews, news_id)
+        if not news:
+            return jsonify({'status': 'error', 'message': '스크랩할 AI 뉴스를 찾을 수 없습니다.'}), 404
+        title, url, source = news.title, news.original_url, 'AI 메인 뉴스'
+        published_at = news.created_at.strftime('%Y-%m-%d') if news.created_at else None
+
+    if not isinstance(url, str) or not url.startswith(('https://', 'http://')):
+        return jsonify({'status': 'error', 'message': '뉴스 원문 주소가 올바르지 않습니다.'}), 422
+
+    bookmark = UserNewsBookmark(
+        user_id=user.id,
+        item_type=item_type,
+        news_id=news_id,
+        title=title,
+        url=url,
+        source=source,
+        published_at=published_at,
+    )
+    db.session.add(bookmark)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        bookmark = UserNewsBookmark.query.filter_by(
+            user_id=user.id, item_type=item_type, news_id=news_id,
+        ).first()
+        if not bookmark:
+            raise
+        return jsonify({'status': 'success', 'data': serialize_news_bookmark(bookmark)}), 200
+    return jsonify({'status': 'success', 'data': serialize_news_bookmark(bookmark)}), 201
+
+
+@user_bp.route('/news-bookmarks/<int:bookmark_id>', methods=['DELETE'])
+@jwt_required()
+def delete_news_bookmark(bookmark_id):
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user:
+        return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
+    bookmark = UserNewsBookmark.query.filter_by(id=bookmark_id, user_id=user.id).first()
+    if not bookmark:
+        return jsonify({'status': 'error', 'message': '스크랩한 뉴스를 찾을 수 없습니다.'}), 404
+    db.session.delete(bookmark)
+    db.session.commit()
+    return jsonify({'status': 'success', 'message': '뉴스 스크랩을 해제했습니다.'})
 
 # [API] 비밀번호 변경
 @user_bp.route('/password', methods=['PUT'])
