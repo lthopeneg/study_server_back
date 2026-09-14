@@ -13,6 +13,7 @@ import time
 from app import app
 from extensions import db
 from models import SecurityNews, DailyMainNews
+from news_persistence import save_daily_main_news
 
 # ==========================================
 # 1. API 키 및 클라이언트 설정
@@ -105,6 +106,8 @@ def generate_ai_news():
 
         print(f"[{datetime.now()}] 🤖 AI 자동 메인 뉴스 생성 파이프라인 시작 (2단계 압축 선발 + 이중화)...")
         news_list = fetch_pending_news()
+        # 외부 AI 호출 중에는 DB 연결을 점유하지 않습니다. 저장 단계에서 새 연결을 받습니다.
+        db.session.remove()
         
         if not news_list:
             print("오늘 수집된 뉴스가 없습니다.")
@@ -246,18 +249,19 @@ def generate_ai_news():
         # Step 4: DB 저장
         # ==========================================================
         print("-> 4단계: DB에 완성된 기사 저장 중...")
-        new_article = DailyMainNews(
-            title=selected_title,
-            content_md=final_markdown,
-            original_url=selected_url,
-            selection_reason=selection_reason
+        _, created = save_daily_main_news(
+            db,
+            DailyMainNews,
+            {
+                "title": selected_title,
+                "content_md": final_markdown,
+                "original_url": selected_url,
+                "selection_reason": selection_reason,
+            },
         )
-        try:
-            db.session.add(new_article)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            raise
+        if not created:
+            print("✅ 기존에 저장된 AI 뉴스를 확인하여 중복 저장 없이 완료했습니다.")
+            return
         
         print("✅ 2단계 압축 선발 + AI 폴백 이중화 파이프라인이 성공적으로 완료되었습니다!")
 
