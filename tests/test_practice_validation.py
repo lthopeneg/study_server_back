@@ -33,6 +33,7 @@ from routes.practice import (
     validate_python_generated_syntax,
     validate_variant,
 )
+from services.generation_cancel import register_generation, unregister_generation
 
 
 def make_structured_hint(source=0, validation_failure=0, sink=0):
@@ -59,6 +60,40 @@ class PracticeValidationTests(unittest.TestCase):
         )
 
         self.assertIn('.NET Framework', error)
+
+    def test_admin_can_cancel_own_active_generation(self):
+        generation_id = 'b381cc25-c5b6-4021-a736-0c6f97a85edf'
+        cancel_event = register_generation(generation_id, 7)
+        self.assertIsNotNone(cancel_event)
+        try:
+            with (
+                self.app.test_request_context(),
+                patch.object(practice_route, 'get_jwt_identity', return_value='admin'),
+                patch.object(practice_route, 'get_admin_user', return_value=SimpleNamespace(id=7)),
+            ):
+                response = practice_route.cancel_problem_generation.__wrapped__(generation_id)
+
+            self.assertEqual(response.get_json()['status'], 'success')
+            self.assertTrue(cancel_event.is_set())
+        finally:
+            unregister_generation(generation_id, cancel_event)
+
+    def test_admin_cannot_cancel_another_admins_generation(self):
+        generation_id = '58d5b4c2-a2d1-4cca-bdaf-d7f023563149'
+        cancel_event = register_generation(generation_id, 7)
+        self.assertIsNotNone(cancel_event)
+        try:
+            with (
+                self.app.test_request_context(),
+                patch.object(practice_route, 'get_jwt_identity', return_value='other-admin'),
+                patch.object(practice_route, 'get_admin_user', return_value=SimpleNamespace(id=8)),
+            ):
+                response, status = practice_route.cancel_problem_generation.__wrapped__(generation_id)
+
+            self.assertEqual(status, 404)
+            self.assertFalse(cancel_event.is_set())
+        finally:
+            unregister_generation(generation_id, cancel_event)
 
     def test_accepts_matching_framework_selection(self):
         error = validate_csharp_environment(

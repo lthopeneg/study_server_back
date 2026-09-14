@@ -6,6 +6,8 @@ from pathlib import Path
 
 from openai import OpenAI
 
+from services.generation_cancel import raise_if_cancelled
+
 
 TEXT_EXTENSIONS = {'.md', '.txt'}
 MAX_REFERENCE_CHARS = 30_000
@@ -255,7 +257,19 @@ secure_blank:
 '''
 
 
-def generate_problem_draft(**conditions):
+def _create_response(client, cancel_event=None, **request_options):
+    if cancel_event is None:
+        return client.responses.create(**request_options)
+
+    raise_if_cancelled(cancel_event)
+    with client.responses.stream(**request_options) as stream:
+        for _event in stream:
+            raise_if_cancelled(cancel_event)
+        raise_if_cancelled(cancel_event)
+        return stream.get_final_response()
+
+
+def generate_problem_draft(cancel_event=None, **conditions):
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
         raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
@@ -268,7 +282,9 @@ def generate_problem_draft(**conditions):
         **{key: value for key, value in conditions.items() if key not in {'reference_scope', 'model'}},
     )
     client = OpenAI(api_key=api_key, timeout=45.0)
-    response = client.responses.create(
+    response = _create_response(
+        client,
+        cancel_event,
         model=conditions['model'],
         instructions='사용자가 지정한 JSON 형식만 반환하는 시큐어코딩 문제 출제자입니다.',
         input=prompt,
@@ -357,7 +373,7 @@ def generate_scenario_draft(**conditions):
     return {'scenario': scenario.strip(), 'extra_request': extra_request}
 
 
-def repair_problem_draft(generated, validation_error, **conditions):
+def repair_problem_draft(generated, validation_error, cancel_event=None, **conditions):
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
         raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
@@ -393,7 +409,9 @@ def repair_problem_draft(generated, validation_error, **conditions):
 {json.dumps(generated, ensure_ascii=False)}
 '''
     client = OpenAI(api_key=api_key, timeout=45.0)
-    response = client.responses.create(
+    response = _create_response(
+        client,
+        cancel_event,
         model=conditions['model'],
         instructions='검증 실패 원인을 정확히 수정하고 전체 JSON만 반환하는 시큐어코딩 문제 교정자입니다.',
         input=repair_prompt,
@@ -408,7 +426,7 @@ def repair_problem_draft(generated, validation_error, **conditions):
         raise RuntimeError('AI 수정 응답을 JSON으로 해석할 수 없습니다.') from error
 
 
-def review_problem_draft(generated, **conditions):
+def review_problem_draft(generated, cancel_event=None, **conditions):
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
         raise RuntimeError('OPENAI_API_KEY가 설정되지 않았습니다.')
@@ -441,7 +459,9 @@ def review_problem_draft(generated, **conditions):
 {json.dumps(generated, ensure_ascii=False)}
 '''
     client = OpenAI(api_key=api_key, timeout=45.0)
-    response = client.responses.create(
+    response = _create_response(
+        client,
+        cancel_event,
         model=conditions['model'],
         instructions='시큐어코딩 문제의 보안 정확성과 정답 완전성을 독립 검수하고 JSON만 반환합니다.',
         input=review_prompt,

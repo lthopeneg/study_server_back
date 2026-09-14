@@ -3,6 +3,7 @@ import json
 import io
 import re
 import zipfile
+import uuid
 from collections import Counter
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -15,6 +16,13 @@ from services.practice_ai import (
     generate_scenario_draft,
     repair_problem_draft,
     review_problem_draft,
+)
+from services.generation_cancel import (
+    GenerationCancelled,
+    cancel_generation,
+    raise_if_cancelled,
+    register_generation,
+    unregister_generation,
 )
 
 
@@ -1354,6 +1362,7 @@ def generate_problem_set():
     reference_scope = data.get('reference_scope', 'latest')
     model = data.get('model', 'gpt-5.6-luna')
     repair_draft = data.get('repair_draft')
+    generation_id = data.get('generation_id')
     repair_error, repair_error_validation = validate_text(
         data.get('repair_error', ''), '이전 검증 오류', 2_000,
         required=repair_draft is not None,
@@ -1382,6 +1391,11 @@ def generate_problem_set():
         return jsonify({'status': 'error', 'message': '연구노트 범위가 올바르지 않습니다.'}), 400
     if model not in ALLOWED_AI_MODELS:
         return jsonify({'status': 'error', 'message': '지원하지 않는 AI 모델입니다.'}), 400
+    try:
+        if not isinstance(generation_id, str) or str(uuid.UUID(generation_id)) != generation_id:
+            raise ValueError
+    except ValueError:
+        return jsonify({'status': 'error', 'message': '생성 요청 식별자가 올바르지 않습니다.'}), 400
     if repair_error_validation:
         return jsonify({'status': 'error', 'message': repair_error_validation}), 400
     if repair_draft is not None:
@@ -1404,6 +1418,9 @@ def generate_problem_set():
         'reference_scope': reference_scope,
         'model': model,
     }
+    cancel_event = register_generation(generation_id, admin.id)
+    if cancel_event is None:
+        return jsonify({'status': 'error', 'message': '같은 식별자의 생성 요청이 이미 진행 중입니다.'}), 409
     generated = None
     repair_attempted = repair_draft is not None
     try:
@@ -1426,10 +1443,11 @@ def generate_problem_set():
 
         if repair_draft is not None:
             generated = repair_problem_draft(
-                repair_draft, repair_error, **generation_conditions,
+                repair_draft, repair_error, cancel_event=cancel_event, **generation_conditions,
             )
         else:
-            generated = generate_problem_draft(**generation_conditions)
+            generated = generate_problem_draft(cancel_event=cancel_event, **generation_conditions)
+        raise_if_cancelled(cancel_event)
         try:
             resolved_project_type, validated_variants = validate_candidate(generated)
         except ValueError as validation_error:
@@ -1439,12 +1457,15 @@ def generate_problem_set():
                 'AI practice problem quality validation failed; attempting repair: %s', validation_error,
             )
             generated = repair_problem_draft(
-                generated, str(validation_error), **generation_conditions,
+                generated, str(validation_error), cancel_event=cancel_event, **generation_conditions,
             )
             repair_attempted = True
             resolved_project_type, validated_variants = validate_candidate(generated)
+        raise_if_cancelled(cancel_event)
         review_target = {'project_type': resolved_project_type, 'variants': validated_variants}
-        ai_review = review_problem_draft(review_target, **generation_conditions)
+        ai_review = review_problem_draft(
+            review_target, cancel_event=cancel_event, **generation_conditions,
+        )
         if ai_review['blocking_issues']:
             if repair_attempted:
                 raise ValueError(
@@ -1454,6 +1475,7 @@ def generate_problem_set():
             generated = repair_problem_draft(
                 review_target,
                 'AI 독립 검수 중대 문제: ' + ' / '.join(ai_review['blocking_issues']),
+                cancel_event=cancel_event,
                 **generation_conditions,
             )
             repair_attempted = True
@@ -1467,6 +1489,7 @@ def generate_problem_set():
                 ],
                 'summary': '독립 검수에서 발견된 중대 문제를 자동 수정하고 서버 검사를 다시 통과했습니다.',
             }
+        raise_if_cancelled(cancel_event)
         warnings = build_generation_warnings(validated_variants, target_blank_count)
         if repair_attempted:
             warnings.insert(0, '초기 생성 결과의 품질 문제를 감지해 AI 자동 수정 1회를 적용했습니다.')
@@ -1478,6 +1501,8 @@ def generate_problem_set():
             repair_attempted,
             ai_review,
         )
+    except GenerationCancelled:
+        return jsonify({'status': 'cancelled', 'message': 'AI 문제 생성을 취소했습니다.'}), 409
     except ValueError as error:
         current_app.logger.warning('Invalid AI practice problem response: %s', error)
         recoverable_draft = build_recoverable_generation_draft(generated)
@@ -1494,6 +1519,8 @@ def generate_problem_set():
     except Exception:
         current_app.logger.exception('AI practice problem generation failed')
         return jsonify({'status': 'error', 'message': 'AI 문제 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'}), 502
+    finally:
+        unregister_generation(generation_id, cancel_event)
 
     return jsonify({'status': 'success', 'data': {
         'variants': validated_variants,
@@ -1501,6 +1528,22 @@ def generate_problem_set():
         'project_type': resolved_project_type,
         'quality_report': quality_report,
     }})
+
+
+@practice_bp.route('/problems/generate/<generation_id>/cancel', methods=['POST'])
+@jwt_required()
+def cancel_problem_generation(generation_id):
+    admin = get_admin_user(get_jwt_identity())
+    if not admin:
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+    try:
+        if str(uuid.UUID(generation_id)) != generation_id:
+            raise ValueError
+    except ValueError:
+        return jsonify({'status': 'error', 'message': '생성 요청 식별자가 올바르지 않습니다.'}), 400
+    if not cancel_generation(generation_id, admin.id):
+        return jsonify({'status': 'error', 'message': '진행 중인 생성 요청을 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'message': 'AI 문제 생성 취소를 요청했습니다.'})
 
 
 @practice_bp.route('/public/problems', methods=['GET'])
