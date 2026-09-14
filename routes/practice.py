@@ -10,7 +10,13 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
-from models import PracticeProblemFile, PracticeProblemSet, PracticeProblemVariant, User
+from models import (
+    PracticeProblemAttempt,
+    PracticeProblemFile,
+    PracticeProblemSet,
+    PracticeProblemVariant,
+    User,
+)
 from services.practice_ai import (
     generate_problem_draft,
     generate_scenario_draft,
@@ -1584,6 +1590,28 @@ def submit_published_problem_set(problem_set_id):
         result = grade_problem_submission(problem_set, data.get('variants'))
     except ValueError as error:
         return jsonify({'status': 'error', 'message': str(error)}), 400
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user:
+        return jsonify({'status': 'error', 'message': '사용자를 찾을 수 없습니다.'}), 404
+    result_by_type = {item['problem_type']: item for item in result['variants']}
+    db.session.add(PracticeProblemAttempt(
+        user_id=user.id,
+        problem_set_id=problem_set.id,
+        problem_title=problem_set.title,
+        language=problem_set.language,
+        major_topic=problem_set.major_topic,
+        minor_topic=problem_set.minor_topic,
+        difficulty=problem_set.difficulty,
+        is_correct=result['correct'],
+        line_selection_correct=result_by_type['line_selection']['correct'],
+        secure_blank_correct=result_by_type['secure_blank']['correct'],
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Practice attempt recording failed')
+        return jsonify({'status': 'error', 'message': '풀이 결과를 저장하지 못했습니다.'}), 500
     return jsonify({'status': 'success', 'data': result})
 
 

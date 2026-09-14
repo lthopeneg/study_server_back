@@ -57,6 +57,30 @@ class PracticeProblemSet(db.Model):
     updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
     variants = db.relationship('PracticeProblemVariant', backref='problem_set', cascade='all, delete-orphan')
 
+
+class PracticeProblemAttempt(db.Model):
+    __tablename__ = 'practice_problem_attempts'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    problem_set_id = db.Column(
+        db.BigInteger,
+        db.ForeignKey('practice_problem_sets.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    problem_title = db.Column(db.String(255), nullable=False)
+    language = db.Column(db.String(20), nullable=False)
+    major_topic = db.Column(db.String(100), nullable=False)
+    minor_topic = db.Column(db.String(255), nullable=False)
+    difficulty = db.Column(db.String(20), nullable=False)
+    is_correct = db.Column(db.Boolean, nullable=False)
+    line_selection_correct = db.Column(db.Boolean, nullable=False)
+    secure_blank_correct = db.Column(db.Boolean, nullable=False)
+    attempted_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    __table_args__ = (
+        db.Index('ix_practice_attempt_user_problem', 'user_id', 'problem_set_id'),
+        db.Index('ix_practice_attempt_user_time', 'user_id', 'attempted_at'),
+    )
+
 class PracticeProblemVariant(db.Model):
     __tablename__ = 'practice_problem_variants'
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
