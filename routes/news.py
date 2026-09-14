@@ -1,9 +1,13 @@
 import email.utils
 from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import case, func
 from extensions import db
-from models import SecurityNews, DailyMainNews
+from models import SecurityNews, DailyMainNews, User
+from news_persistence import save_daily_main_news
+from services.news_ai import write_news_article
+from extensions import limiter
 
 # '/api/news' 로 시작하는 주소 묶음 선언
 news_bp = Blueprint('news', __name__, url_prefix='/api/news')
@@ -139,3 +143,53 @@ def get_daily_main_news():
     except Exception:
         current_app.logger.exception("Daily main news query failed")
         return jsonify({"status": "error", "message": "AI 메인 뉴스를 불러오는데 실패했습니다."}), 500
+
+
+@news_bp.route('/<int:news_id>/generate-ai-article', methods=['POST'])
+@jwt_required()
+@limiter.limit('2 per hour')
+def generate_ai_article_from_news(news_id):
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user or user.role != 'ADMIN':
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    news = db.session.get(SecurityNews, news_id)
+    if not news:
+        return jsonify({'status': 'error', 'message': '뉴스를 찾을 수 없습니다.'}), 404
+    existing = DailyMainNews.query.filter_by(original_url=news.link).first()
+    if existing:
+        return jsonify({
+            'status': 'error',
+            'message': '이미 AI 기사로 작성된 뉴스입니다.',
+            'data': {'id': existing.id},
+        }), 409
+
+    title, url = news.title, news.link
+    db.session.remove()
+    try:
+        content = write_news_article(title, url)
+        article, created = save_daily_main_news(db, DailyMainNews, {
+            'title': title,
+            'content_md': content,
+            'original_url': url,
+            'selection_reason': '관리자가 전체 뉴스 목록에서 직접 선택한 기사입니다.',
+        }, log=current_app.logger.info)
+        if not created:
+            return jsonify({
+                'status': 'error',
+                'message': '이미 AI 기사로 작성된 뉴스입니다.',
+                'data': {'id': article.id},
+            }), 409
+        return jsonify({
+            'status': 'success',
+            'message': 'AI 기사를 작성했습니다.',
+            'data': {'id': article.id},
+        }), 201
+    except ValueError as error:
+        return jsonify({'status': 'error', 'message': str(error)}), 422
+    except RuntimeError as error:
+        current_app.logger.warning('Manual AI news generation failed: %s', error)
+        return jsonify({'status': 'error', 'message': str(error)}), 502
+    except Exception:
+        current_app.logger.exception('Manual AI news generation failed')
+        return jsonify({'status': 'error', 'message': 'AI 기사 작성 중 오류가 발생했습니다.'}), 500
