@@ -11,6 +11,18 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    concurrency:
+      group: daily-security-news-pipeline
+      cancel-in-progress: false
+    env:
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     
     steps:
       - name: 백엔드 소스코드 가져오기
@@ -26,17 +38,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: 자동화 스크립트 2종 연속 실행 (크롤링 -> AI 기사 작성)
-        # 운영 환경에서는 .env 파일이 없으므로, 깃허브 시크릿에 넣어둔 DB 정보와 API 키를 주입해 줍니다!
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # 👈 AI를 위한 API 키 주입!
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: 뉴스 수집
+        run: python crawl_news.py
+
+      - name: AI 기사 생성 (일시 실패 시 1회 재시도)
         run: |
-          python crawl_news.py
-          python generate_ai_news.py
+          for attempt in 1 2; do
+            if python generate_ai_news.py; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 2 ]; then
+              echo "::warning title=AI 뉴스 생성 재시도::10초 후 생성 단계만 다시 실행합니다."
+              sleep 10
+            fi
+          done
+          exit 1
