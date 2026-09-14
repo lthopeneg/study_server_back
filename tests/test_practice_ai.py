@@ -4,14 +4,32 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from services.practice_ai import (
+    _create_response,
     generate_problem_draft,
     generate_scenario_draft,
     repair_problem_draft,
     review_problem_draft,
 )
+from services.generation_cancel import GenerationCancelled
 
 
 class PracticeAiTests(unittest.TestCase):
+    def test_closes_stream_when_generation_is_cancelled(self):
+        cancel_event = MagicMock()
+        cancel_event.is_set.side_effect = [False, True]
+        stream = MagicMock()
+        stream.__iter__.return_value = iter([SimpleNamespace(type='response.output_text.delta')])
+        stream_manager = MagicMock()
+        stream_manager.__enter__.return_value = stream
+        client = MagicMock()
+        client.responses.stream.return_value = stream_manager
+
+        with self.assertRaises(GenerationCancelled):
+            _create_response(client, cancel_event, model='test-model', input='prompt')
+
+        stream_manager.__exit__.assert_called_once()
+        stream.get_final_response.assert_not_called()
+
     @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
     @patch('services.practice_ai.OpenAI')
     def test_expands_short_scenario_and_generates_extra_request(self, openai_class, _collect_context):
