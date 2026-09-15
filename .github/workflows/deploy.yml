@@ -59,6 +59,9 @@ jobs:
             
             docker pull $IMAGE_URL
 
+            # Caddy가 컨테이너 이름으로 백엔드에 연결할 공용 네트워크를 보장합니다.
+            docker network inspect study-network >/dev/null 2>&1 || docker network create study-network
+
             # Docker가 root 소유로 자동 생성하지 않도록 배포 계정으로 마운트 경로를 준비합니다.
             mkdir -p /home/ubuntu/practice_problems
             
@@ -66,7 +69,7 @@ jobs:
             docker rm study-back-app || true
             
             # 연구 노트와 Git에서 관리하는 실습 문제를 읽기 전용으로 마운트합니다.
-            docker run -d -p 5000:5000 \
+            docker run -d --network study-network \
               -v /home/ubuntu/research_note:/home/ubuntu/research_note \
               -v /home/ubuntu/practice_problems:/data/practice_problems:ro \
               -e DB_USER=${{ secrets.DB_USER }} \
