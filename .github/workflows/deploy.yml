@@ -77,6 +77,10 @@ jobs:
               -e DB_HOST=${{ secrets.DB_HOST }} \
               -e DB_NAME=${{ secrets.DB_NAME }} \
               -e JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }} \
+              -e APP_ENV=production \
+              -e JWT_COOKIE_SECURE=true \
+              -e JWT_COOKIE_CSRF_PROTECT=true \
+              -e CORS_ORIGINS=https://scspace.duckdns.org \
               -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \

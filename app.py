@@ -14,19 +14,32 @@ from routes.practice import practice_bp
 import models 
 from schema_migrations import apply_schema_migrations
 from runtime_safety import database_engine_options, install_request_logging
+from security_config import parse_boolean_setting, parse_cors_origins
 
 load_dotenv()
 app = Flask(__name__)
 install_request_logging(app)
-CORS(app, supports_credentials=True)
 
 # --- 1. 설정 (Config) ---
 # JWT 서명 키는 로컬 .env 또는 운영 배포 환경에서 반드시 주입해야 합니다.
 # 누락된 상태로 공개 기본키를 사용하는 대신 서버 시작을 즉시 중단합니다.
 app.config["JWT_SECRET_KEY"] = os.environ["JWT_SECRET_KEY"]
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-app.config["JWT_COOKIE_SECURE"] = False 
-app.config["JWT_COOKIE_CSRF_PROTECT"] = False 
+is_production = os.getenv("APP_ENV", "development").strip().lower() == "production"
+app.config["JWT_COOKIE_SECURE"] = parse_boolean_setting(
+    os.getenv("JWT_COOKIE_SECURE"), is_production,
+)
+app.config["JWT_COOKIE_CSRF_PROTECT"] = parse_boolean_setting(
+    os.getenv("JWT_COOKIE_CSRF_PROTECT"), True,
+)
+app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+
+cors_origins = parse_cors_origins(os.getenv("CORS_ORIGINS"))
+CORS(
+    app,
+    resources={r"/api/*": {"origins": cors_origins}},
+    supports_credentials=True,
+)
 
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
