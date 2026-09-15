@@ -180,7 +180,7 @@ def get_learning_progress():
     return jsonify({'status': 'success', 'data': build_learning_progress(user.id, language)})
 
 
-def serialize_news_bookmark(bookmark):
+def serialize_news_bookmark(bookmark, ai_article_id=None):
     return {
         'id': bookmark.id,
         'item_type': bookmark.item_type,
@@ -190,6 +190,7 @@ def serialize_news_bookmark(bookmark):
         'source': bookmark.source,
         'published_at': bookmark.published_at,
         'created_at': to_korea_iso(bookmark.created_at),
+        'ai_article_id': ai_article_id,
     }
 
 
@@ -204,7 +205,24 @@ def get_news_bookmarks():
         .order_by(UserNewsBookmark.created_at.desc(), UserNewsBookmark.id.desc())
         .all()
     )
-    return jsonify({'status': 'success', 'data': [serialize_news_bookmark(item) for item in bookmarks]})
+    bookmark_urls = {item.url for item in bookmarks if item.url}
+    ai_article_ids_by_url = {}
+    if bookmark_urls:
+        ai_articles = (
+            DailyMainNews.query
+            .filter(DailyMainNews.original_url.in_(bookmark_urls))
+            .order_by(DailyMainNews.id.desc())
+            .all()
+        )
+        for article in ai_articles:
+            ai_article_ids_by_url.setdefault(article.original_url, article.id)
+    return jsonify({
+        'status': 'success',
+        'data': [
+            serialize_news_bookmark(item, ai_article_ids_by_url.get(item.url))
+            for item in bookmarks
+        ],
+    })
 
 
 @user_bp.route('/news-bookmarks', methods=['POST'])

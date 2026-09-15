@@ -56,6 +56,7 @@ class NewsBookmarkApiTestCase(unittest.TestCase):
 
         listing = self.client.get('/api/user/news-bookmarks', headers=self.headers())
         self.assertEqual(listing.get_json()['data'][0]['title'], '보안 뉴스')
+        self.assertIsNone(listing.get_json()['data'][0]['ai_article_id'])
 
         forbidden = self.client.delete(f'/api/user/news-bookmarks/{bookmark_id}', headers=self.headers('other'))
         self.assertEqual(forbidden.status_code, 404)
@@ -71,6 +72,23 @@ class NewsBookmarkApiTestCase(unittest.TestCase):
         data = response.get_json()['data']
         self.assertEqual(data['source'], 'AI 메인 뉴스')
         self.assertEqual(data['url'], 'https://example.com/ai')
+
+        listing = self.client.get('/api/user/news-bookmarks', headers=self.headers())
+        self.assertEqual(listing.get_json()['data'][0]['ai_article_id'], 20)
+
+    def test_security_news_bookmark_links_to_generated_ai_article(self):
+        db.session.add(DailyMainNews(
+            id=21, title='보안 뉴스 AI 기사', content_md='본문',
+            original_url='https://example.com/security', created_at=datetime(2026, 9, 15),
+        ))
+        db.session.commit()
+        self.client.post('/api/user/news-bookmarks', json={
+            'item_type': 'security_news', 'news_id': 10,
+        }, headers=self.headers())
+
+        listing = self.client.get('/api/user/news-bookmarks', headers=self.headers())
+
+        self.assertEqual(listing.get_json()['data'][0]['ai_article_id'], 21)
 
     def test_rejects_unknown_news(self):
         response = self.client.post('/api/user/news-bookmarks', json={
