@@ -1,4 +1,3 @@
-import os
 import ipaddress
 import socket
 from pathlib import Path
@@ -6,13 +5,12 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from google import genai
-from openai import OpenAI
+
+from services.news_llm import call_news_llm
 
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent / 'News_prompt' / 'make_news_prompt.txt'
 MAX_ARTICLE_BODY_LENGTH = 5_000
-AI_REQUEST_TIMEOUT_SECONDS = 20
 
 
 def validate_public_news_url(url):
@@ -59,49 +57,9 @@ def fetch_article_body(url):
     return body[:MAX_ARTICLE_BODY_LENGTH]
 
 
-def call_news_writer(prompt):
-    gemini_key = os.getenv('GEMINI_API_KEY')
-    openai_key = os.getenv('OPENAI_API_KEY')
-    if not gemini_key and not openai_key:
-        raise RuntimeError('AI 뉴스 생성 API 키가 설정되어 있지 않습니다.')
-
-    if gemini_key:
-        try:
-            response = genai.Client(
-                api_key=gemini_key,
-                http_options={'timeout': AI_REQUEST_TIMEOUT_SECONDS * 1_000},
-            ).models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            if response.text and response.text.strip():
-                return response.text.strip()
-        except Exception:
-            if not openai_key:
-                raise RuntimeError('AI 뉴스 생성에 실패했습니다.')
-
-    try:
-        response = OpenAI(
-            api_key=openai_key,
-            timeout=AI_REQUEST_TIMEOUT_SECONDS,
-            max_retries=0,
-        ).chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-        )
-        content = response.choices[0].message.content
-        if not content or not content.strip():
-            raise RuntimeError('AI가 기사 본문을 생성하지 않았습니다.')
-        return content.strip()
-    except RuntimeError:
-        raise
-    except Exception as error:
-        raise RuntimeError('AI 뉴스 생성에 실패했습니다.') from error
-
-
 def write_news_article(title, url):
     body = fetch_article_body(url)
     prompt_template = PROMPT_PATH.read_text(encoding='utf-8')
     safe_url = url.replace('http://', 'https://', 1)
     prompt = f'{prompt_template}\n\n[원문 제목]: {title}\n[원문 URL]: {safe_url}\n[본문 내용]:\n{body}'
-    return call_news_writer(prompt)
+    return call_news_llm(prompt)
