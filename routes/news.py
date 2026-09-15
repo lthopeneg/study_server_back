@@ -39,6 +39,22 @@ def parse_news_date(news):
         except (TypeError, ValueError, OverflowError):
             return news.created_at or datetime.min
 
+def get_ai_article_ids_by_url(news_items):
+    links = {news.link for news in news_items if news.link}
+    if not links:
+        return {}
+
+    articles = (
+        DailyMainNews.query
+        .filter(DailyMainNews.original_url.in_(links))
+        .order_by(DailyMainNews.id.desc())
+        .all()
+    )
+    result = {}
+    for article in articles:
+        result.setdefault(article.original_url, article.id)
+    return result
+
 @news_bp.route('/', methods=['GET'])
 def get_news():
     page = parse_positive_int_arg('page', 1)
@@ -75,6 +91,7 @@ def get_news():
             .limit(limit)
             .all()
         )
+        ai_article_ids_by_url = get_ai_article_ids_by_url(paginated_news)
 
         result = []
         for news in paginated_news:
@@ -82,7 +99,8 @@ def get_news():
             display_date = "" if dt == datetime.min else dt.strftime("%Y-%m-%d %H:%M")
             result.append({
                 "id": news.id, "title": news.title, "link": news.link, 
-                "pub_date": display_date, "source": news.source
+                "pub_date": display_date, "source": news.source,
+                "ai_article_id": ai_article_ids_by_url.get(news.link),
             })
 
         return jsonify({"status": "success", "data": result, "total": total_count, "page": page, "total_pages": (total_count + limit - 1) // limit}), 200

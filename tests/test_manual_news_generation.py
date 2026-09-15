@@ -7,7 +7,7 @@ from flask_jwt_extended import create_access_token
 
 from extensions import db, jwt, limiter
 from models import DailyMainNews, SecurityNews, User
-from routes.news import news_bp
+from routes.news import get_ai_article_ids_by_url, news_bp
 from services.news_ai import validate_public_news_url
 
 
@@ -68,6 +68,22 @@ class ManualNewsGenerationApiTestCase(unittest.TestCase):
             response = self.client.post('/api/news/10/generate-ai-article', headers=self.headers('admin'))
         self.assertEqual(response.status_code, 409)
         write_article.assert_not_called()
+
+    def test_maps_news_to_existing_ai_article(self):
+        db.session.add_all([
+            DailyMainNews(
+                id=20, title='기존 기사', content_md='본문',
+                original_url='https://example.com/news', selection_reason='기존',
+            ),
+            DailyMainNews(
+                id=21, title='최신 기사', content_md='본문',
+                original_url='https://example.com/news', selection_reason='최신',
+            ),
+        ])
+        db.session.commit()
+
+        news = db.session.get(SecurityNews, 10)
+        self.assertEqual(get_ai_article_ids_by_url([news]), {'https://example.com/news': 21})
 
 
 class NewsUrlValidationTestCase(unittest.TestCase):
