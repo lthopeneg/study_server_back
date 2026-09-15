@@ -12,6 +12,11 @@
 
 GitHub Actions는 배포할 때 `study-network`를 확인하고 새 애플리케이션 컨테이너를 이 네트워크에 연결해야 합니다. Caddy 설정은 서버의 `/home/ubuntu/caddy/Caddyfile`, 인증서와 런타임 데이터는 `study-caddy-data` 및 `study-caddy-config` Docker 볼륨에 있습니다.
 
+백엔드 컨테이너는 `APP_ENV=production`, `JWT_COOKIE_SECURE=true`,
+`JWT_COOKIE_CSRF_PROTECT=true`, `CORS_ORIGINS=https://scspace.duckdns.org`로 실행합니다.
+프론트엔드는 같은 출처의 `/api`를 사용하고 변경 요청에 CSRF 헤더를 자동으로 전송합니다.
+HTTPS 프록시 없이 Secure 쿠키 설정을 먼저 적용하면 브라우저가 인증 쿠키를 전송하지 않습니다.
+
 기본 상태 확인:
 
 ```sh

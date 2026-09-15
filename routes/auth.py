@@ -173,6 +173,7 @@ def refresh():
     return resp, 200
 
 @auth_bp.route('/logout', methods=['POST'])
+@jwt_required(optional=True)
 def logout():
     resp = jsonify({"status": "success", "message": "안전하게 로그아웃 되었습니다."})
     unset_jwt_cookies(resp)
