@@ -1,77 +1,17 @@
-import os
 import json
 import sys
 from datetime import datetime, date
 from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
-# 🚨 최신 라이브러리로 변경 (pip install google-genai 필요)
-from google import genai
-from google.genai import types
-from openai import OpenAI
 import time
 from app import app
 from extensions import db
 from models import SecurityNews, DailyMainNews
 from news_persistence import save_daily_main_news
+from services.news_llm import call_news_llm
 
-# ==========================================
-# 1. API 키 및 클라이언트 설정
-# ==========================================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PROMPT_DIR = Path(__file__).resolve().parent / "News_prompt"
-
-if not GEMINI_API_KEY:
-    raise ValueError("환경 변수에 GEMINI_API_KEY가 없습니다!")
-
-# 최신 Gemini 클라이언트 초기화 방식
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
-openai_client = None
-if OPENAI_API_KEY:
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
-# ==========================================
-# 2. 공통 AI 호출 래퍼 (Fallback 로직)
-# ==========================================
-def call_llm_with_fallback(prompt, is_json=False):
-    """Gemini API를 먼저 시도하고, 에러 발생 시 OpenAI API로 자동 전환합니다."""
-    # [1차 시도] Gemini (최신 SDK v1 기준 코드)
-    try:
-        print("   [안내] Gemini API 호출 시도 중...")
-        if is_json:
-            response = gemini_client.models.generate_content(
-                model='gemini-2.5-flash', # 2026년 기준 안정적인 최신 플래시 모델 권장 (혹은 gemini-1.5-flash)
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
-        else:
-            response = gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt
-            )
-        return response.text
-    except Exception as gemini_err:
-        print(f"   ⚠️ Gemini 호출 실패: {gemini_err}")
-        print("   -> OpenAI(gpt-4o-mini)로 백업 호출 시도 중...")
-        
-        # [2차 시도] OpenAI Fallback
-        if not openai_client:
-            raise RuntimeError("Gemini가 실패했지만 OPENAI_API_KEY가 설정되어 있지 않아 복구할 수 없습니다.")
-            
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"} if is_json else None
-            )
-            return response.choices[0].message.content
-        except Exception as openai_err:
-            print(f"   ❌ OpenAI 호출 마저 실패: {openai_err}")
-            raise RuntimeError("모든 AI API 호출에 실패했습니다.")
 
 def fetch_pending_news():
     """마지막 AI 기사 생성 이후 수집되어 아직 처리되지 않은 뉴스를 가져옵니다."""
@@ -127,7 +67,7 @@ def generate_ai_news():
             
         final_prompt_prelim = f"{check_prompt_prelim}\n\n{candidates_text_prelim}"
         
-        response_prelim_text = call_llm_with_fallback(final_prompt_prelim, is_json=True)
+        response_prelim_text = call_news_llm(final_prompt_prelim, is_json=True, log=print)
         
         try:
             parsed_data = json.loads(response_prelim_text)
@@ -202,7 +142,7 @@ def generate_ai_news():
             candidates_text_final += f"[{i+1}] 제목: {cand['title']}\n    URL: {cand['url']}\n    본문 내용: {short_body}\n\n"
             
         final_prompt_final = f"{check_prompt_final}\n\n{candidates_text_final}"
-        response_final_text = call_llm_with_fallback(final_prompt_final, is_json=True)
+        response_final_text = call_news_llm(final_prompt_final, is_json=True, log=print)
         
         try:
             selected_info = json.loads(response_final_text)
@@ -241,7 +181,7 @@ def generate_ai_news():
         
         final_prompt_3 = f"{make_prompt}\n\n[원문 제목]: {selected_title}\n[원문 URL]: {safe_url}\n[본문 내용]:\n{article_body}"
         
-        final_markdown = call_llm_with_fallback(final_prompt_3, is_json=False)
+        final_markdown = call_news_llm(final_prompt_3, log=print)
         if not final_markdown or not final_markdown.strip():
             raise RuntimeError("AI가 기사 본문을 생성하지 않았습니다.")
         
