@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import case, func
 from extensions import db
-from models import SecurityNews, DailyMainNews, User
+from models import SecurityNews, DailyMainNews, User, UserNewsBookmark
 from news_persistence import save_daily_main_news
 from services.news_ai import write_news_article
 from extensions import limiter
@@ -161,6 +161,25 @@ def get_daily_main_news():
     except Exception:
         current_app.logger.exception("Daily main news query failed")
         return jsonify({"status": "error", "message": "AI 메인 뉴스를 불러오는데 실패했습니다."}), 500
+
+
+@news_bp.route('/daily-main/<int:news_id>', methods=['DELETE'])
+@jwt_required()
+def delete_daily_main_news(news_id):
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    if not user or user.role != 'ADMIN':
+        return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
+
+    news = db.session.get(DailyMainNews, news_id)
+    if not news:
+        return jsonify({'status': 'error', 'message': 'AI 기사를 찾을 수 없습니다.'}), 404
+
+    UserNewsBookmark.query.filter_by(item_type='daily_main', news_id=news_id).delete(
+        synchronize_session=False,
+    )
+    db.session.delete(news)
+    db.session.commit()
+    return jsonify({'status': 'success', 'message': 'AI 기사를 삭제했습니다.'}), 200
 
 
 @news_bp.route('/<int:news_id>/generate-ai-article', methods=['POST'])

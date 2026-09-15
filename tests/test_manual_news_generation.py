@@ -6,7 +6,7 @@ from flask import Flask
 from flask_jwt_extended import create_access_token
 
 from extensions import db, jwt, limiter
-from models import DailyMainNews, SecurityNews, User
+from models import DailyMainNews, SecurityNews, User, UserNewsBookmark
 from routes.news import get_ai_article_ids_by_url, news_bp
 from services.news_ai import validate_public_news_url
 
@@ -84,6 +84,37 @@ class ManualNewsGenerationApiTestCase(unittest.TestCase):
 
         news = db.session.get(SecurityNews, 10)
         self.assertEqual(get_ai_article_ids_by_url([news]), {'https://example.com/news': 21})
+
+    def test_admin_deletes_ai_article_and_its_direct_bookmarks(self):
+        db.session.add_all([
+            DailyMainNews(
+                id=20, title='삭제할 기사', content_md='본문',
+                original_url='https://example.com/news', selection_reason='기존',
+            ),
+            UserNewsBookmark(
+                id=30, user_id=2, item_type='daily_main', news_id=20,
+                title='삭제할 기사', url='https://example.com/news', source='AI 메인 뉴스',
+            ),
+        ])
+        db.session.commit()
+
+        response = self.client.delete('/api/news/daily-main/20', headers=self.headers('admin'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.session.get(DailyMainNews, 20))
+        self.assertIsNone(db.session.get(UserNewsBookmark, 30))
+
+    def test_non_admin_cannot_delete_ai_article(self):
+        db.session.add(DailyMainNews(
+            id=20, title='보호된 기사', content_md='본문',
+            original_url='https://example.com/news', selection_reason='기존',
+        ))
+        db.session.commit()
+
+        response = self.client.delete('/api/news/daily-main/20', headers=self.headers('user'))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIsNotNone(db.session.get(DailyMainNews, 20))
 
 
 class NewsUrlValidationTestCase(unittest.TestCase):
