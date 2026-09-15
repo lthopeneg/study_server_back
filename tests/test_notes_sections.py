@@ -45,6 +45,13 @@ class NotesSectionTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(response.get_json()["status"], "error")
 
+    def test_python_execution_route_is_not_registered(self):
+        self.app.register_blueprint(notes_route.notes_bp)
+
+        response = self.app.test_client().post('/api/notes/run', json={'code': 'print(1)'})
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
