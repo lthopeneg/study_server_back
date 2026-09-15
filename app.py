@@ -57,6 +57,8 @@ app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USERNAME'] = os.getenv("MAIL_USERNAME")
 app.config['MAIL_PASSWORD'] = os.getenv("MAIL_PASSWORD")
+app.config['SIGNUP_APPROVAL_EMAIL'] = os.getenv("SIGNUP_APPROVAL_EMAIL", app.config['MAIL_USERNAME'])
+app.config['PUBLIC_FRONTEND_URL'] = os.getenv('PUBLIC_FRONTEND_URL', 'https://scspace.duckdns.org').rstrip('/')
 
 # --- 2. 확장 모듈 초기화 연결 (init_app) ---
 db.init_app(app)

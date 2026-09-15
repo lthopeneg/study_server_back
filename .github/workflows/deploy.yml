@@ -81,6 +81,7 @@ jobs:
               -e JWT_COOKIE_SECURE=true \
               -e JWT_COOKIE_CSRF_PROTECT=true \
               -e CORS_ORIGINS=https://scspace.duckdns.org \
+              -e PUBLIC_FRONTEND_URL=https://scspace.duckdns.org \
               -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \

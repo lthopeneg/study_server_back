@@ -2,7 +2,7 @@ from extensions import db
 
 class User(db.Model):
     __tablename__ = 'users'
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     login_id = db.Column(db.String(50), unique=True, nullable=False) 
     password = db.Column(db.String(255), nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
@@ -17,6 +17,18 @@ class EmailVerification(db.Model):
     code = db.Column(db.String(6), nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
     is_verified = db.Column(db.Boolean, default=False)
+
+class PendingSignup(db.Model):
+    __tablename__ = 'pending_signups'
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    login_id = db.Column(db.String(50), nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    email = db.Column(db.String(255), nullable=False, index=True)
+    phone = db.Column(db.String(20), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    requested_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    decided_at = db.Column(db.DateTime, nullable=True)
+    decided_by = db.Column(db.BigInteger, db.ForeignKey('users.id'), nullable=True)
 
 class SecurityNews(db.Model):
     __tablename__ = 'security_news'
@@ -55,7 +67,7 @@ class UserNewsBookmark(db.Model):
 
 class PracticeProblemSet(db.Model):
     __tablename__ = 'practice_problem_sets'
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     title = db.Column(db.String(255), nullable=False)
     language = db.Column(db.String(20), nullable=False)
     runtime_platform = db.Column(db.String(30), nullable=True)
