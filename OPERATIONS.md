@@ -1,3 +1,25 @@
+# 운영 진입점과 컨테이너 구성
+
+- 공식 주소: `https://scspace.duckdns.org`
+- Caddy 컨테이너: `study-caddy`; 호스트 TCP 80/443과 UDP 443 공개
+- 프론트엔드: `study-front-app:80`; 외부 포트 미공개
+- 백엔드: `study-back-app:5000`; 외부 포트 미공개
+- 세 컨테이너는 `study-network`에서 통신합니다.
+- `/api/*`는 Caddy가 백엔드로 전달하고 나머지 요청은 프론트엔드로 전달합니다.
+- 공인 IP의 HTTP 요청은 공식 HTTPS 주소로 리디렉션합니다.
+
+GitHub Actions는 배포할 때 `study-network`를 확인하고 새 애플리케이션 컨테이너를 이 네트워크에 연결해야 합니다. Caddy 설정은 서버의 `/home/ubuntu/caddy/Caddyfile`, 인증서와 런타임 데이터는 `study-caddy-data` 및 `study-caddy-config` Docker 볼륨에 있습니다.
+
+기본 상태 확인:
+
+```sh
+docker ps --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}'
+docker network inspect study-network
+docker logs --since 10m --tail 200 study-caddy
+```
+
+정상 상태에서는 Caddy만 호스트의 80/443을 공개하고 프론트엔드와 백엔드에는 `0.0.0.0` 포트 매핑이 없습니다. Caddy를 재생성할 때 인증서 유지를 위해 기존 두 Docker 볼륨을 다시 마운트합니다.
+
 # 응답 지연 진단
 
 컨테이너가 running이어도 HTTP 요청을 처리하지 못할 수 있습니다.
