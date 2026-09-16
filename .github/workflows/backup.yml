@@ -1,0 +1,32 @@
+name: Encrypted Database Backup
+
+on:
+  schedule:
+    - cron: "20 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create encrypted backup on Oracle Cloud
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        with:
+          host: ${{ secrets.SS_HOST }}
+          username: ${{ secrets.SS_USERNAME }}
+          key: ${{ secrets.SS_KEY }}
+          command_timeout: 20m
+          script: |
+            set -eu
+            docker inspect study-back-app >/dev/null
+            docker exec study-back-app python backup_database.py create
+            latest_backup="$(find /home/ubuntu/study-backups -maxdepth 1 -type f -name '*.sql.gz.enc' -printf '%T@ %f\n' | sort -nr | head -n 1)"
+            test -n "$latest_backup"
+            echo "Latest encrypted backup: ${latest_backup#* }"

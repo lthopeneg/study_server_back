@@ -1,0 +1,41 @@
+name: Production Security Check
+
+on:
+  schedule:
+    - cron: "40 18 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect production exposure and backup freshness
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        with:
+          host: ${{ secrets.SS_HOST }}
+          username: ${{ secrets.SS_USERNAME }}
+          key: ${{ secrets.SS_KEY }}
+          script: |
+            set -eu
+            for container in study-caddy study-front-app study-back-app study-rate-limit; do
+              test "$(docker inspect -f '{{.State.Running}}' "$container")" = "true"
+            done
+
+            test -z "$(docker port study-front-app)"
+            test -z "$(docker port study-back-app)"
+            test -z "$(docker port study-rate-limit)"
+
+            published_ports="$(docker port study-caddy)"
+            echo "$published_ports" | grep -q '80/'
+            echo "$published_ports" | grep -q '443/'
+
+            docker exec study-back-app python -c "import os; required=('APP_ENV','JWT_SECRET_KEY','DB_HOST','BACKUP_ENCRYPTION_KEY'); missing=[name for name in required if not os.getenv(name)]; assert not missing, 'missing required production settings: ' + ', '.join(missing); assert os.getenv('APP_ENV') == 'production'"
+            docker exec study-back-app python -c "import http.client; connection=http.client.HTTPConnection('127.0.0.1',5000,timeout=5); connection.request('GET','/api/check-auth'); response=connection.getresponse(); assert response.status == 401, response.status"
+
+            find /home/ubuntu/study-backups -maxdepth 1 -type f -name '*.sql.gz.enc' -mtime -2 | grep -q .
+            disk_used="$(df --output=pcent / | tail -n 1 | tr -dc '0-9')"
+            test "$disk_used" -lt 90
+            echo "Production security check passed; disk usage ${disk_used}%"
