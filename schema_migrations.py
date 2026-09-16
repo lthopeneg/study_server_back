@@ -11,11 +11,33 @@ PRACTICE_PROBLEM_SET_COLUMNS = {
     "managed_by": "VARCHAR(20) NOT NULL DEFAULT 'web'",
 }
 
+PENDING_SIGNUP_COLUMNS = {
+    "notification_status": "VARCHAR(20) NOT NULL DEFAULT 'not_sent'",
+    "notification_sent_at": "DATETIME NULL",
+}
+
 
 def apply_schema_migrations():
     """Apply the small, idempotent schema additions used by this project."""
     inspector = inspect(db.engine)
-    if 'practice_problem_sets' not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+
+    if 'pending_signups' in table_names:
+        pending_columns = {
+            column['name'] for column in inspector.get_columns('pending_signups')
+        }
+        with db.engine.begin() as connection:
+            for column_name, column_definition in PENDING_SIGNUP_COLUMNS.items():
+                if column_name not in pending_columns:
+                    connection.execute(text(
+                        f'ALTER TABLE pending_signups ADD COLUMN {column_name} {column_definition}'
+                    ))
+
+    if 'email_verifications' in table_names:
+        with db.engine.begin() as connection:
+            connection.execute(text('DROP TABLE email_verifications'))
+
+    if 'practice_problem_sets' not in table_names:
         return
 
     existing_columns = {

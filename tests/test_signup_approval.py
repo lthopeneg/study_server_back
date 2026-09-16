@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from flask import Flask
@@ -45,6 +46,7 @@ class SignupApprovalTestCase(unittest.TestCase):
         pending = PendingSignup.query.filter_by(login_id='learner').one()
         self.assertTrue(check_password_hash(pending.password_hash, 'Password!1'))
         self.assertNotIn('Password!1', send_mail.call_args.args[0].body)
+        self.assertIn('SECURECODE SPACE', send_mail.call_args.args[0].html)
 
         approved = self.client.post(
             f'/api/admin/signup-requests/{pending.id}/approve', headers=self.headers('admin'),
@@ -52,6 +54,8 @@ class SignupApprovalTestCase(unittest.TestCase):
         self.assertEqual(approved.status_code, 200, approved.get_json())
         self.assertIsNotNone(User.query.filter_by(login_id='learner').first())
         self.assertEqual(pending.status, 'approved')
+        self.assertEqual(pending.notification_status, 'sent')
+        self.assertEqual(send_mail.call_count, 2)
 
     @patch('routes.auth.mail.send')
     def test_non_admin_cannot_approve(self, _send_mail):
@@ -63,6 +67,35 @@ class SignupApprovalTestCase(unittest.TestCase):
             f'/api/admin/signup-requests/{pending.id}/approve', headers=self.headers('user'),
         )
         self.assertEqual(response.status_code, 403)
+
+    @patch('routes.auth.mail.send')
+    def test_expired_request_moves_to_history_and_allows_new_request(self, _send_mail):
+        expired = PendingSignup(
+            login_id='learner', password_hash='hash', email='learner@example.com',
+            status='pending', requested_at=datetime.now() - timedelta(days=8),
+        )
+        db.session.add(expired); db.session.commit()
+        listed = self.client.get('/api/admin/signup-requests', headers=self.headers('admin'))
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(db.session.get(PendingSignup, expired.id).status, 'expired')
+        retried = self.client.post('/api/signup', json={
+            'login_id': 'learner', 'password': 'Password!1', 'email': 'learner@example.com', 'phone': '010',
+        })
+        self.assertEqual(retried.status_code, 202)
+
+    @patch('routes.auth.mail.send', side_effect=[None, RuntimeError('smtp unavailable')])
+    def test_approval_remains_complete_when_result_email_fails(self, _send_mail):
+        self.client.post('/api/signup', json={
+            'login_id': 'learner', 'password': 'Password!1', 'email': 'learner@example.com', 'phone': '010',
+        })
+        pending = PendingSignup.query.filter_by(login_id='learner').one()
+        response = self.client.post(
+            f'/api/admin/signup-requests/{pending.id}/approve', headers=self.headers('admin'),
+        )
+        self.assertEqual(response.status_code, 200)
+        saved = db.session.get(PendingSignup, pending.id)
+        self.assertEqual(saved.status, 'approved')
+        self.assertEqual(saved.notification_status, 'failed')
 
 
 if __name__ == '__main__':
