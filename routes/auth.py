@@ -13,6 +13,7 @@ from flask_jwt_extended import (
 )
 from extensions import db, mail, limiter
 from models import User, PendingSignup
+from rate_limit_config import login_account_key, signup_email_key
 
 # '/api' 로 시작하는 주소 묶음 선언
 auth_bp = Blueprint('auth', __name__, url_prefix='/api')
@@ -66,6 +67,7 @@ def send_decision_email(pending, approved):
 
 @auth_bp.route('/signup', methods=['POST'])
 @limiter.limit("3 per hour")
+@limiter.limit("2 per day", key_func=signup_email_key)
 def signup():
     data = request.get_json(silent=True) or {}
     login_id = data.get('login_id')
@@ -208,6 +210,7 @@ def reject_signup_request(request_id):
 
 @auth_bp.route('/login', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour")
+@limiter.limit("10 per hour", key_func=login_account_key)
 def login():
     data = request.json
     req_user_id = data.get('userId')

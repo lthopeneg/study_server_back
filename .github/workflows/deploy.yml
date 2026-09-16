@@ -62,6 +62,16 @@ jobs:
             # Caddy가 컨테이너 이름으로 백엔드에 연결할 공용 네트워크를 보장합니다.
             docker network inspect study-network >/dev/null 2>&1 || docker network create study-network
 
+            # 요청 제한 기록은 외부 포트를 열지 않은 전용 Redis에 보존합니다.
+            docker volume inspect study-rate-limit-data >/dev/null 2>&1 || docker volume create study-rate-limit-data
+            docker inspect study-rate-limit >/dev/null 2>&1 || docker run -d \
+              --network study-network \
+              --restart unless-stopped \
+              -v study-rate-limit-data:/data \
+              --name study-rate-limit \
+              redis:7-alpine redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
+            docker start study-rate-limit >/dev/null
+
             # Docker가 root 소유로 자동 생성하지 않도록 배포 계정으로 마운트 경로를 준비합니다.
             mkdir -p /home/ubuntu/practice_problems
             
@@ -82,6 +92,7 @@ jobs:
               -e JWT_COOKIE_CSRF_PROTECT=true \
               -e CORS_ORIGINS=https://scspace.duckdns.org \
               -e PUBLIC_FRONTEND_URL=https://scspace.duckdns.org \
+              -e RATELIMIT_STORAGE_URI=redis://study-rate-limit:6379/0 \
               -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \

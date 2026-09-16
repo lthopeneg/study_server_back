@@ -4,10 +4,25 @@ from flask import Flask, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, set_access_cookies
 
 from extensions import jwt
-from security_config import parse_boolean_setting, parse_cors_origins
+from security_config import install_security_headers, parse_boolean_setting, parse_cors_origins
 
 
 class SecurityConfigTestCase(unittest.TestCase):
+    def test_applies_api_security_headers(self):
+        app = Flask(__name__)
+        install_security_headers(app)
+
+        @app.get('/api/profile')
+        def profile():
+            return jsonify(status='success')
+
+        response = app.test_client().get('/api/profile')
+        self.assertEqual(response.headers['Strict-Transport-Security'], 'max-age=31536000')
+        self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertIn('camera=()', response.headers['Permissions-Policy'])
+
     def test_parses_explicit_boolean_values(self):
         self.assertTrue(parse_boolean_setting('true'))
         self.assertTrue(parse_boolean_setting(' ON '))
