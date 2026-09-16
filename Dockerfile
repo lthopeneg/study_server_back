@@ -4,7 +4,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 암호화된 운영 DB 백업과 복구에 필요한 최소 클라이언트 도구
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     default-mysql-client openssl \
     && rm -rf /var/lib/apt/lists/*
 
