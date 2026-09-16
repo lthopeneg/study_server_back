@@ -2,6 +2,7 @@ import os
 from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # 방금 만든 확장 모듈과 라우터(블루프린트) 가져오기
 from extensions import db, jwt, mail, limiter
@@ -15,6 +16,7 @@ import models
 from schema_migrations import apply_schema_migrations
 from runtime_safety import database_engine_options, install_request_logging
 from security_config import install_security_headers, parse_boolean_setting, parse_cors_origins
+from rate_limit_config import install_rate_limit_error_handler
 
 load_dotenv()
 app = Flask(__name__)
@@ -27,6 +29,9 @@ install_security_headers(app)
 app.config["JWT_SECRET_KEY"] = os.environ["JWT_SECRET_KEY"]
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 is_production = os.getenv("APP_ENV", "development").strip().lower() == "production"
+if is_production:
+    # 운영 백엔드는 외부에 직접 노출되지 않고 Caddy 한 단계를 통해서만 접근합니다.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config["JWT_COOKIE_SECURE"] = parse_boolean_setting(
     os.getenv("JWT_COOKIE_SECURE"), is_production,
 )
@@ -60,12 +65,18 @@ app.config['MAIL_USERNAME'] = os.getenv("MAIL_USERNAME")
 app.config['MAIL_PASSWORD'] = os.getenv("MAIL_PASSWORD")
 app.config['SIGNUP_APPROVAL_EMAIL'] = os.getenv("SIGNUP_APPROVAL_EMAIL", app.config['MAIL_USERNAME'])
 app.config['PUBLIC_FRONTEND_URL'] = os.getenv('PUBLIC_FRONTEND_URL', 'https://scspace.duckdns.org').rstrip('/')
+app.config['RATELIMIT_STORAGE_URI'] = os.getenv(
+    'RATELIMIT_STORAGE_URI',
+    'redis://study-rate-limit:6379/0' if is_production else 'memory://',
+)
+app.config['RATELIMIT_HEADERS_ENABLED'] = True
 
 # --- 2. 확장 모듈 초기화 연결 (init_app) ---
 db.init_app(app)
 jwt.init_app(app)
 mail.init_app(app)
 limiter.init_app(app)
+install_rate_limit_error_handler(app)
 
 # 서버 켜질 때 테이블 존재 여부 확인 및 생성
 with app.app_context():
