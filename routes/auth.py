@@ -15,6 +15,7 @@ from extensions import db, mail, limiter
 from models import User, PendingSignup
 from rate_limit_config import login_account_key, signup_email_key
 from session_security import session_claims
+from audit import record_audit_event
 
 # '/api' 로 시작하는 주소 묶음 선언
 auth_bp = Blueprint('auth', __name__, url_prefix='/api')
@@ -182,6 +183,8 @@ def approve_signup_request(request_id):
         db.session.commit()
         current_app.logger.exception("Signup approval notification failed")
         message = "가입 신청은 승인했지만 결과 메일을 발송하지 못했습니다."
+    record_audit_event('signup.approve', actor=admin, target_type='pending_signup', target_id=request_id,
+                       details={'notification_status': pending.notification_status})
     return jsonify({"status": "success", "message": message})
 
 
@@ -207,6 +210,8 @@ def reject_signup_request(request_id):
         db.session.commit()
         current_app.logger.exception("Signup rejection notification failed")
         message = "가입 신청은 거절했지만 결과 메일을 발송하지 못했습니다."
+    record_audit_event('signup.reject', actor=admin, target_type='pending_signup', target_id=request_id,
+                       details={'notification_status': pending.notification_status})
     return jsonify({"status": "success", "message": message})
 
 @auth_bp.route('/login', methods=['POST'])
@@ -224,7 +229,11 @@ def login():
         
         resp = jsonify({"status": "success", "username": user.login_id, "expires_at": expires_at, "message": f"{user.login_id}님 환영합니다!"})
         set_access_cookies(resp, access_token)
+        if user.role == 'ADMIN':
+            record_audit_event('auth.admin_login', actor=user)
         return resp, 200
+    if user and user.role == 'ADMIN':
+        record_audit_event('auth.admin_login', actor=user, outcome='failure')
     return jsonify({"status": "error", "message": "아이디 또는 비밀번호가 잘못되었습니다."}), 401
 
 @auth_bp.route('/check-auth', methods=['GET'])

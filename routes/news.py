@@ -8,6 +8,7 @@ from models import SecurityNews, DailyMainNews, User, UserNewsBookmark
 from news_persistence import save_daily_main_news
 from services.news_ai import write_news_article
 from extensions import limiter
+from audit import record_audit_event
 
 # '/api/news' 로 시작하는 주소 묶음 선언
 news_bp = Blueprint('news', __name__, url_prefix='/api/news')
@@ -179,6 +180,7 @@ def delete_daily_main_news(news_id):
     )
     db.session.delete(news)
     db.session.commit()
+    record_audit_event('news.ai_delete', actor=user, target_type='daily_main_news', target_id=news_id)
     return jsonify({'status': 'success', 'message': 'AI 기사를 삭제했습니다.'}), 200
 
 
@@ -217,6 +219,8 @@ def generate_ai_article_from_news(news_id):
                 'message': '이미 AI 기사로 작성된 뉴스입니다.',
                 'data': {'id': article.id},
             }), 409
+        record_audit_event('news.ai_generate', actor=user, target_type='daily_main_news', target_id=article.id,
+                           details={'source_news_id': news_id})
         return jsonify({
             'status': 'success',
             'message': 'AI 기사를 작성했습니다.',
