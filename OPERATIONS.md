@@ -64,3 +64,55 @@ TimeoutError는 응답 대기 실패입니다. 로그 공유 전 개인정보와
 `--timeout 60`도 개별 요청의 60초 종료를 보장하지 않습니다.
 외부 API·SMTP 대기, 잠금, 모든 스레드 점유 등의 원인은 추가 진단이 필요합니다.
 DB 제한으로 정상 장기 쿼리도 실패할 수 있으므로 배포 후 실제 사용을 확인합니다.
+
+# 암호화 백업과 복구
+
+운영 백엔드는 `/home/ubuntu/study-backups`를 컨테이너의 `/backups`에 마운트합니다.
+GitHub 저장소의 `BACKUP_ENCRYPTION_KEY` Secret은 충분히 긴 무작위 값으로 등록하고,
+GitHub 외의 안전한 비밀 저장소에도 별도 보관해야 합니다. 이 값을 잃으면 기존 백업을
+복구할 수 없습니다. Secret 값은 로그나 명령 이력에 출력하지 않습니다.
+
+`Encrypted Database Backup` 작업은 매일 한국시간 오전 3시 20분에 다음 명령을 실행합니다.
+백업은 MySQL 일관성 덤프를 gzip으로 압축한 다음 AES-256-CBC와 PBKDF2로 암호화하며
+권한을 600으로 설정합니다. 기본 보관 기간은 14일입니다.
+
+```sh
+docker exec study-back-app python backup_database.py create
+find /home/ubuntu/study-backups -maxdepth 1 -type f -name '*.sql.gz.enc' -printf '%TY-%Tm-%Td %TH:%TM %s %f\n'
+```
+
+복구는 데이터를 변경하므로 먼저 별도 DB에서 연습합니다. 백업 파일 크기와 생성 시각을
+확인한 다음 복구 대상 DB 이름을 `--confirm`에 정확히 입력합니다.
+
+```sh
+docker exec study-back-app python backup_database.py restore /backups/백업파일.sql.gz.enc --confirm 실제_DB_NAME
+```
+
+복구 후에는 사용자 수, 최신 뉴스와 문제 수를 확인하고 로그인·스크랩·문제 조회를
+검증합니다. 암호화 파일의 존재만으로 복구 가능성을 보장할 수 없으므로 월 1회 별도
+복구 DB에서 실제 복구 훈련을 수행합니다.
+
+# 주간 운영 보안 점검
+
+`Production Security Check` 작업은 매주 다음 항목을 읽기 전용으로 검사합니다.
+
+- Caddy, 프론트, 백엔드, Redis 컨테이너 실행 상태
+- Caddy만 80/443을 공개하고 앱·Redis는 호스트 포트를 공개하지 않는지 여부
+- 운영 모드와 JWT·DB·백업 필수 환경변수의 존재 여부(값은 출력하지 않음)
+- 백엔드 인증 API가 5초 안에 응답하는지 여부
+- 최근 2일 안의 암호화 백업 존재 여부
+- 루트 디스크 사용량 90% 미만 여부
+
+실패하면 GitHub Actions에서 실패 알림을 확인합니다. 이 점검은 OS 패치, SSH 키 관리,
+Oracle Cloud NSG와 DB 서버 방화벽을 대신하지 않습니다. 월 1회 다음 항목도 수동 확인합니다.
+
+```sh
+sudo ss -lntup
+sudo ufw status verbose
+docker ps --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}'
+docker inspect study-back-app --format 'restarts={{.RestartCount}} oom={{.State.OOMKilled}}'
+```
+
+애플리케이션 로그를 공유하거나 보관하기 전 쿠키, 토큰, 이메일, 전화번호, API 키와 DB
+접속정보가 포함되지 않았는지 확인합니다. 로그인 보안 화면에는 IP와 기기의 원문이 아닌
+서버 비밀키 기반 요약값만 표시됩니다.

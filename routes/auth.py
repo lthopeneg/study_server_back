@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html import escape
 from flask import Blueprint, jsonify, request, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -9,13 +9,16 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from flask_jwt_extended import (
     create_access_token, set_access_cookies, 
-    jwt_required, get_jwt_identity, unset_jwt_cookies
+    jwt_required, get_jwt, get_jwt_identity, unset_jwt_cookies
 )
 from extensions import db, mail, limiter
-from models import User, PendingSignup
+from models import User, PendingSignup, UserSession
 from rate_limit_config import login_account_key, signup_email_key
-from session_security import session_claims
+from session_security import (
+    create_user_session, extend_user_session, revoke_user_session, session_claims,
+)
 from audit import record_audit_event
+from security_monitor import evaluate_login_event
 
 # '/api' 로 시작하는 주소 묶음 선언
 auth_bp = Blueprint('auth', __name__, url_prefix='/api')
@@ -40,7 +43,7 @@ def build_email(title, greeting, body, action_label=None, action_url=None, accen
     return f'''<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:Arial,sans-serif;color:#1e293b"><div style="max-width:580px;margin:32px auto;padding:0 16px"><div style="background:#0f172a;padding:22px 28px;border-radius:14px 14px 0 0;color:#fff"><div style="font-size:12px;letter-spacing:1.8px;color:#7dd3fc">SECURECODE SPACE</div><h1 style="margin:8px 0 0;font-size:24px">{escape(title)}</h1></div><div style="background:#fff;padding:30px 28px;border-radius:0 0 14px 14px;box-shadow:0 10px 30px rgba(15,23,42,.08)"><p style="font-size:17px;font-weight:700">{escape(greeting)}</p><div style="font-size:15px;line-height:1.7;color:#475569">{body}</div>{action}<p style="margin-top:30px;padding-top:18px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8">본 메일은 회원가입 신청 처리 결과를 안내하기 위해 발송되었습니다.</p></div></div></body></html>'''
 
 def expire_and_prune_signup_requests():
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     PendingSignup.query.filter(
         PendingSignup.status == 'pending',
         PendingSignup.requested_at < now - timedelta(days=SIGNUP_EXPIRY_DAYS),
@@ -218,22 +221,27 @@ def reject_signup_request(request_id):
 @limiter.limit("5 per minute;20 per hour")
 @limiter.limit("10 per hour", key_func=login_account_key)
 def login():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     req_user_id = data.get('userId')
     req_password = data.get('password')
-    user = User.query.filter_by(login_id=req_user_id).first()
+    normalized_login = req_user_id.strip()[:50] if isinstance(req_user_id, str) else None
+    user = User.query.filter_by(login_id=normalized_login).first() if normalized_login else None
     
-    if user and check_password_hash(user.password, req_password):
-        access_token = create_access_token(identity=user.login_id, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
+    if user and isinstance(req_password, str) and check_password_hash(user.password, req_password):
+        session = create_user_session(user)
+        access_token = create_access_token(identity=user.login_id, additional_claims=session_claims(user, session), expires_delta=timedelta(minutes=30))
         expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
         
         resp = jsonify({"status": "success", "username": user.login_id, "expires_at": expires_at, "message": f"{user.login_id}님 환영합니다!"})
         set_access_cookies(resp, access_token)
-        if user.role == 'ADMIN':
-            record_audit_event('auth.admin_login', actor=user)
+        event = record_audit_event('auth.login', actor=user, details={'role': user.role})
+        evaluate_login_event(event, is_admin=user.role == 'ADMIN')
         return resp, 200
-    if user and user.role == 'ADMIN':
-        record_audit_event('auth.admin_login', actor=user, outcome='failure')
+    event = record_audit_event(
+        'auth.login', actor=user, actor_login_id=normalized_login,
+        outcome='failure', details={'role': user.role if user else 'unknown'},
+    )
+    evaluate_login_event(event, is_admin=bool(user and user.role == 'ADMIN'))
     return jsonify({"status": "error", "message": "아이디 또는 비밀번호가 잘못되었습니다."}), 401
 
 @auth_bp.route('/check-auth', methods=['GET'])
@@ -243,7 +251,10 @@ def check_auth():
     user = User.query.filter_by(login_id=current_user).first()
     if not user:
         return jsonify({"status": "error", "message": "사용자를 찾을 수 없습니다."}), 404
-    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
+    session = UserSession.query.filter_by(session_id=get_jwt().get('session_id'), user_id=user.id).first()
+    if session:
+        extend_user_session(session)
+    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user, session), expires_delta=timedelta(minutes=30))
     expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
     
     resp = jsonify({"status": "success", "username": current_user, "expires_at": expires_at})
@@ -257,7 +268,10 @@ def refresh():
     user = User.query.filter_by(login_id=current_user).first()
     if not user:
         return jsonify({"status": "error", "message": "사용자를 찾을 수 없습니다."}), 404
-    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
+    session = UserSession.query.filter_by(session_id=get_jwt().get('session_id'), user_id=user.id).first()
+    if session:
+        extend_user_session(session)
+    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user, session), expires_delta=timedelta(minutes=30))
     expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
     
     resp = jsonify({"status": "success", "message": "세션이 30분 연장되었습니다.", "expires_at": expires_at})
@@ -267,6 +281,60 @@ def refresh():
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required(optional=True)
 def logout():
+    if get_jwt_identity():
+        session = UserSession.query.filter_by(session_id=get_jwt().get('session_id')).first()
+        revoke_user_session(session)
     resp = jsonify({"status": "success", "message": "안전하게 로그아웃 되었습니다."})
     unset_jwt_cookies(resp)
     return resp, 200
+
+
+@auth_bp.get('/sessions')
+@jwt_required()
+def list_sessions():
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    current_session_id = get_jwt().get('session_id')
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    sessions = UserSession.query.filter(
+        UserSession.user_id == user.id, UserSession.revoked_at.is_(None),
+        UserSession.expires_at > now,
+    ).order_by(UserSession.last_seen_at.desc()).all()
+    return jsonify({'status': 'success', 'data': [{
+        'session_id': item.session_id,
+        'ip_hash': item.ip_hash,
+        'device_hash': item.user_agent_hash,
+        'created_at': item.created_at.replace(tzinfo=timezone.utc).isoformat(),
+        'last_seen_at': item.last_seen_at.replace(tzinfo=timezone.utc).isoformat(),
+        'expires_at': item.expires_at.replace(tzinfo=timezone.utc).isoformat(),
+        'is_current': item.session_id == current_session_id,
+    } for item in sessions]})
+
+
+@auth_bp.delete('/sessions/<session_id>')
+@jwt_required()
+def delete_session(session_id):
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    session = UserSession.query.filter_by(session_id=session_id, user_id=user.id).first()
+    if not session or session.revoked_at:
+        return jsonify({'status': 'error', 'message': '활성 세션을 찾을 수 없습니다.'}), 404
+    revoke_user_session(session)
+    record_audit_event('account.session_revoke', actor=user, target_type='session', target_id=session_id)
+    response = jsonify({'status': 'success', 'message': '선택한 세션을 종료했습니다.'})
+    if get_jwt().get('session_id') == session_id:
+        unset_jwt_cookies(response)
+    return response
+
+
+@auth_bp.delete('/sessions')
+@jwt_required()
+def delete_all_sessions():
+    user = User.query.filter_by(login_id=get_jwt_identity()).first()
+    count = UserSession.query.filter_by(user_id=user.id, revoked_at=None).update(
+        {'revoked_at': datetime.now(timezone.utc).replace(tzinfo=None)}, synchronize_session=False,
+    )
+    db.session.commit()
+    record_audit_event('account.session_revoke_all', actor=user, target_type='user', target_id=user.id,
+                       details={'revoked_count': count})
+    response = jsonify({'status': 'success', 'message': '모든 로그인 세션을 종료했습니다.'})
+    unset_jwt_cookies(response)
+    return response

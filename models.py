@@ -39,6 +39,38 @@ class AuditLog(db.Model):
     details_json = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now(), index=True)
 
+
+class SecurityAlert(db.Model):
+    __tablename__ = 'security_alerts'
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    fingerprint = db.Column(db.String(160), nullable=False, index=True)
+    category = db.Column(db.String(50), nullable=False, index=True)
+    severity = db.Column(db.String(20), nullable=False, index=True)
+    title = db.Column(db.String(160), nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    actor_login_id = db.Column(db.String(50), nullable=True)
+    ip_hash = db.Column(db.String(24), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='open', index=True)
+    occurrence_count = db.Column(db.Integer, nullable=False, default=1)
+    first_seen_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now(), index=True)
+    notified_at = db.Column(db.DateTime, nullable=True)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    resolved_by = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+
+
+class UserSession(db.Model):
+    __tablename__ = 'user_sessions'
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    session_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    ip_hash = db.Column(db.String(24), nullable=True)
+    user_agent_hash = db.Column(db.String(24), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    revoked_at = db.Column(db.DateTime, nullable=True, index=True)
+
 class SecurityNews(db.Model):
     __tablename__ = 'security_news'
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
