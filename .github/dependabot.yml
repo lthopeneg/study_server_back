@@ -7,10 +7,14 @@ updates:
       day: monday
       time: "04:00"
       timezone: Asia/Seoul
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      python-dependencies:
+      python-minor-and-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /
@@ -20,6 +24,9 @@ updates:
       time: "04:15"
       timezone: Asia/Seoul
     open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
