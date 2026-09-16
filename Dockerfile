@@ -10,7 +10,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 
 # 패키지 목록 복사 및 설치
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
 # 소스 코드 전체 복사
 COPY . .
