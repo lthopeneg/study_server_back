@@ -14,6 +14,7 @@ from flask_jwt_extended import (
 from extensions import db, mail, limiter
 from models import User, PendingSignup
 from rate_limit_config import login_account_key, signup_email_key
+from session_security import session_claims
 
 # '/api' 로 시작하는 주소 묶음 선언
 auth_bp = Blueprint('auth', __name__, url_prefix='/api')
@@ -218,7 +219,7 @@ def login():
     user = User.query.filter_by(login_id=req_user_id).first()
     
     if user and check_password_hash(user.password, req_password):
-        access_token = create_access_token(identity=user.login_id, expires_delta=timedelta(minutes=30))
+        access_token = create_access_token(identity=user.login_id, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
         expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
         
         resp = jsonify({"status": "success", "username": user.login_id, "expires_at": expires_at, "message": f"{user.login_id}님 환영합니다!"})
@@ -230,7 +231,10 @@ def login():
 @jwt_required()
 def check_auth():
     current_user = get_jwt_identity()
-    new_access_token = create_access_token(identity=current_user, expires_delta=timedelta(minutes=30))
+    user = User.query.filter_by(login_id=current_user).first()
+    if not user:
+        return jsonify({"status": "error", "message": "사용자를 찾을 수 없습니다."}), 404
+    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
     expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
     
     resp = jsonify({"status": "success", "username": current_user, "expires_at": expires_at})
@@ -241,7 +245,10 @@ def check_auth():
 @jwt_required()
 def refresh():
     current_user = get_jwt_identity()
-    new_access_token = create_access_token(identity=current_user, expires_delta=timedelta(minutes=30))
+    user = User.query.filter_by(login_id=current_user).first()
+    if not user:
+        return jsonify({"status": "error", "message": "사용자를 찾을 수 없습니다."}), 404
+    new_access_token = create_access_token(identity=current_user, additional_claims=session_claims(user), expires_delta=timedelta(minutes=30))
     expires_at = int((datetime.now() + timedelta(minutes=30)).timestamp() * 1000)
     
     resp = jsonify({"status": "success", "message": "세션이 30분 연장되었습니다.", "expires_at": expires_at})

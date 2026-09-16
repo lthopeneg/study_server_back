@@ -17,6 +17,7 @@ from schema_migrations import apply_schema_migrations
 from runtime_safety import database_engine_options, install_request_logging
 from security_config import install_security_headers, parse_boolean_setting, parse_cors_origins
 from rate_limit_config import install_rate_limit_error_handler
+from session_security import install_session_security
 
 load_dotenv()
 app = Flask(__name__)
@@ -74,6 +75,7 @@ app.config['RATELIMIT_HEADERS_ENABLED'] = True
 # --- 2. 확장 모듈 초기화 연결 (init_app) ---
 db.init_app(app)
 jwt.init_app(app)
+install_session_security(jwt)
 mail.init_app(app)
 limiter.init_app(app)
 install_rate_limit_error_handler(app)

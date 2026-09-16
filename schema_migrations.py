@@ -16,11 +16,24 @@ PENDING_SIGNUP_COLUMNS = {
     "notification_sent_at": "DATETIME NULL",
 }
 
+USER_COLUMNS = {
+    "session_version": "INT NOT NULL DEFAULT 0",
+}
+
 
 def apply_schema_migrations():
     """Apply the small, idempotent schema additions used by this project."""
     inspector = inspect(db.engine)
     table_names = inspector.get_table_names()
+
+    if 'users' in table_names:
+        user_columns = {column['name'] for column in inspector.get_columns('users')}
+        with db.engine.begin() as connection:
+            for column_name, column_definition in USER_COLUMNS.items():
+                if column_name not in user_columns:
+                    connection.execute(text(
+                        f'ALTER TABLE users ADD COLUMN {column_name} {column_definition}'
+                    ))
 
     if 'pending_signups' in table_names:
         pending_columns = {
