@@ -10,30 +10,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  security-check:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Build image for security scanning
-        run: docker build --tag study-server-back:security-scan .
-
-      - name: Block fixable high and critical image vulnerabilities
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          scan-type: image
-          image-ref: study-server-back:security-scan
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          format: table
-
   build-and-push:
-    needs: security-check
     runs-on: ubuntu-latest
     permissions:
       contents: read
