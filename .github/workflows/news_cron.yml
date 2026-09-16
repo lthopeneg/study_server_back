@@ -4,7 +4,7 @@ name: Daily Security News Crawler
 on:
   # 1. 매일 KST 아침 9시 (UTC 기준 00:00) 마다 자동으로 알아서 실행
   schedule:
-    - cron: '43 23 * * *'
+    - cron: "43 23 * * *"
   # 2. 깃허브 웹사이트에서 수동으로 버튼을 눌러서 강제로 실행해 볼 수 있도록 허용
   workflow_dispatch:
 
@@ -16,7 +16,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: 앱 서버의 백엔드 컨테이너에서 뉴스 파이프라인 실행
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.SS_HOST }}
           username: ${{ secrets.SS_USERNAME }}
