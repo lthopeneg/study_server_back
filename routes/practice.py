@@ -11,6 +11,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db, limiter
+from audit import record_audit_event
 from models import (
     PracticeProblemAttempt,
     PracticeProblemFile,
@@ -1668,6 +1669,7 @@ def update_problem_set(problem_set_id):
         db.session.rollback()
         current_app.logger.exception('Practice problem set update failed')
         return jsonify({'status': 'error', 'message': '문제 세트 수정에 실패했습니다.'}), 500
+    record_audit_event('practice.update', actor=admin, target_type='practice_problem', target_id=problem_set_id)
     return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
 
 
@@ -1687,6 +1689,7 @@ def delete_problem_set(problem_set_id):
         db.session.rollback()
         current_app.logger.exception('Practice problem set deletion failed')
         return jsonify({'status': 'error', 'message': '문제 세트 삭제에 실패했습니다.'}), 500
+    record_audit_event('practice.delete', actor=admin, target_type='practice_problem', target_id=problem_set_id)
     return jsonify({'status': 'success', 'data': {'deleted_ids': [problem_set_id]}})
 
 
@@ -1714,6 +1717,8 @@ def delete_problem_sets_batch():
         db.session.rollback()
         current_app.logger.exception('Practice problem set batch deletion failed')
         return jsonify({'status': 'error', 'message': '문제 세트 일괄 삭제에 실패했습니다.'}), 500
+    record_audit_event('practice.delete_batch', actor=admin, target_type='practice_problem',
+                       target_id='batch', details={'problem_ids': problem_ids})
     return jsonify({'status': 'success', 'data': {'deleted_ids': problem_ids}})
 
 
@@ -1759,6 +1764,8 @@ def update_problem_status(problem_set_id):
         current_app.logger.exception('Practice problem status update failed')
         return jsonify({'status': 'error', 'message': '공개 상태 변경에 실패했습니다.'}), 500
 
+    record_audit_event('practice.status_change', actor=admin, target_type='practice_problem',
+                       target_id=problem_set_id, details={'status': status})
     return jsonify({'status': 'success', 'data': serialize_problem_summary(problem_set)})
 
 
@@ -1796,4 +1803,6 @@ def create_problem_set():
         current_app.logger.exception('Practice problem set creation failed')
         return jsonify({'status': 'error', 'message': '문제 세트 저장에 실패했습니다.'}), 500
 
+    record_audit_event('practice.create', actor=admin, target_type='practice_problem', target_id=problem_set.id,
+                       details={'language': problem_set.language, 'status': problem_set.status})
     return jsonify({'status': 'success', 'data': {'id': problem_set.id, 'status': problem_set.status}}), 201

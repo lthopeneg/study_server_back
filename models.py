@@ -25,6 +25,20 @@ class PendingSignup(db.Model):
     notification_status = db.Column(db.String(20), nullable=False, default='not_sent')
     notification_sent_at = db.Column(db.DateTime, nullable=True)
 
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    actor_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    actor_login_id = db.Column(db.String(50), nullable=True)
+    event_type = db.Column(db.String(80), nullable=False, index=True)
+    target_type = db.Column(db.String(50), nullable=True)
+    target_id = db.Column(db.String(100), nullable=True)
+    outcome = db.Column(db.String(20), nullable=False, index=True)
+    request_id = db.Column(db.String(32), nullable=True, index=True)
+    ip_hash = db.Column(db.String(24), nullable=True)
+    details_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now(), index=True)
+
 class SecurityNews(db.Model):
     __tablename__ = 'security_news'
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)

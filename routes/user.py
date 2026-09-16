@@ -15,6 +15,7 @@ from models import (
     UserNewsBookmark,
 )
 from session_security import invalidate_user_sessions
+from audit import record_audit_event
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
 KOREA_TIMEZONE = timezone(timedelta(hours=9), name='KST')
@@ -330,6 +331,8 @@ def change_password():
     user.password = generate_password_hash(new_password)
     invalidate_user_sessions(user)
     db.session.commit()
+
+    record_audit_event('account.password_change', actor=user, target_type='user', target_id=user.id)
 
     response = jsonify({"status": "success", "message": "비밀번호가 변경되었습니다. 새 비밀번호로 다시 로그인해 주세요."})
     unset_jwt_cookies(response)
