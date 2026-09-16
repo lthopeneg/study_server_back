@@ -14,11 +14,12 @@ from routes.practice import practice_bp
 import models 
 from schema_migrations import apply_schema_migrations
 from runtime_safety import database_engine_options, install_request_logging
-from security_config import parse_boolean_setting, parse_cors_origins
+from security_config import install_security_headers, parse_boolean_setting, parse_cors_origins
 
 load_dotenv()
 app = Flask(__name__)
 install_request_logging(app)
+install_security_headers(app)
 
 # --- 1. 설정 (Config) ---
 # JWT 서명 키는 로컬 .env 또는 운영 배포 환경에서 반드시 주입해야 합니다.

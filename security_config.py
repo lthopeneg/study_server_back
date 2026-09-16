@@ -16,3 +16,21 @@ def parse_cors_origins(value):
     if '*' in origins:
         raise ValueError('Credentialed CORS cannot allow every origin.')
     return origins
+
+
+def install_security_headers(app):
+    """Apply defense-in-depth headers to API responses."""
+    @app.after_request
+    def add_security_headers(response):
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        response.headers.setdefault(
+            'Permissions-Policy',
+            'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+        )
+        response.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+        response.headers.setdefault('Cross-Origin-Resource-Policy', 'same-origin')
+        response.headers.setdefault('Cache-Control', 'no-store')
+        return response
