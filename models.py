@@ -10,14 +10,6 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=True, default='USER')
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
-class EmailVerification(db.Model):
-    __tablename__ = 'email_verifications'
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
-    email = db.Column(db.String(255), nullable=False)
-    code = db.Column(db.String(6), nullable=False)
-    expires_at = db.Column(db.DateTime, nullable=False)
-    is_verified = db.Column(db.Boolean, default=False)
-
 class PendingSignup(db.Model):
     __tablename__ = 'pending_signups'
     id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
@@ -29,6 +21,8 @@ class PendingSignup(db.Model):
     requested_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
     decided_at = db.Column(db.DateTime, nullable=True)
     decided_by = db.Column(db.BigInteger, db.ForeignKey('users.id'), nullable=True)
+    notification_status = db.Column(db.String(20), nullable=False, default='not_sent')
+    notification_sent_at = db.Column(db.DateTime, nullable=True)
 
 class SecurityNews(db.Model):
     __tablename__ = 'security_news'
