@@ -58,6 +58,58 @@ class FakeConnection:
 
 
 class CrawlNewsTests(unittest.TestCase):
+    @patch.dict(
+        "os.environ",
+        {
+            "DB_HOST": "private-db",
+            "DB_USER": "user",
+            "DB_PASSWORD": "password",
+            "DB_NAME": "study",
+        },
+        clear=True,
+    )
+    @patch("crawl_news.time.sleep")
+    @patch("crawl_news.pymysql.connect")
+    def test_db_connection_retries_transient_timeout(self, connect, sleep):
+        expected_connection = object()
+        connect.side_effect = [
+            crawl_news.pymysql.err.OperationalError(2003, "timed out"),
+            expected_connection,
+        ]
+
+        connection = crawl_news.get_db_connection()
+
+        self.assertIs(connection, expected_connection)
+        self.assertEqual(connect.call_count, 2)
+        sleep.assert_called_once_with(crawl_news.DB_CONNECT_RETRY_DELAY_SECONDS)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "DB_HOST": "private-db",
+            "DB_USER": "user",
+            "DB_PASSWORD": "password",
+            "DB_NAME": "study",
+        },
+        clear=True,
+    )
+    @patch("crawl_news.time.sleep")
+    @patch("crawl_news.pymysql.connect")
+    def test_db_connection_stops_after_bounded_retries(self, connect, sleep):
+        connect.side_effect = crawl_news.pymysql.err.OperationalError(2003, "timed out")
+
+        with self.assertRaises(crawl_news.pymysql.err.OperationalError):
+            crawl_news.get_db_connection()
+
+        self.assertEqual(connect.call_count, crawl_news.DB_CONNECT_ATTEMPTS)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [
+                crawl_news.DB_CONNECT_RETRY_DELAY_SECONDS,
+                crawl_news.DB_CONNECT_RETRY_DELAY_SECONDS * 2,
+            ],
+        )
+
     def test_date_range_backfills_after_latest_stored_date(self):
         connection = FakeConnection([{"pub_date": "2026-08-19T12:00:00+09:00"}])
 

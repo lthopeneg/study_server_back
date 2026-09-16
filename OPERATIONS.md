@@ -12,6 +12,8 @@
 
 GitHub Actions는 배포할 때 `study-network`를 확인하고 새 애플리케이션 컨테이너를 이 네트워크에 연결해야 합니다. Caddy 설정은 서버의 `/home/ubuntu/caddy/Caddyfile`, 인증서와 런타임 데이터는 `study-caddy-data` 및 `study-caddy-config` Docker 볼륨에 있습니다.
 
+예약 뉴스 파이프라인은 공용 GitHub 실행기에서 사설 MySQL로 직접 연결하지 않습니다. GitHub Actions가 앱 서버에 SSH로 접속한 뒤 DB 접근 권한이 있는 `study-back-app` 컨테이너 안에서 수집과 AI 생성을 실행합니다. 따라서 뉴스 작업에는 배포 워크플로와 동일한 `SS_HOST`, `SS_USERNAME`, `SS_KEY` Repository Secret이 필요합니다.
+
 백엔드 컨테이너는 `APP_ENV=production`, `JWT_COOKIE_SECURE=true`,
 `JWT_COOKIE_CSRF_PROTECT=true`, `CORS_ORIGINS=https://scspace.duckdns.org`로 실행합니다.
 프론트엔드는 같은 출처의 `/api`를 사용하고 변경 요청에 CSRF 헤더를 자동으로 전송합니다.

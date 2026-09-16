@@ -93,6 +93,7 @@ jobs:
               -e CORS_ORIGINS=https://scspace.duckdns.org \
               -e PUBLIC_FRONTEND_URL=https://scspace.duckdns.org \
               -e RATELIMIT_STORAGE_URI=redis://study-rate-limit:6379/0 \
+              -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
               -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \

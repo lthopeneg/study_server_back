@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import unquote_plus, urlparse
@@ -24,6 +25,8 @@ BOANNEWS_MAX_BACKFILL_DAYS = 7
 BOANNEWS_MAX_PAGES = 10
 KST = timezone(timedelta(hours=9))
 REQUEST_TIMEOUT_SECONDS = 20
+DB_CONNECT_ATTEMPTS = 3
+DB_CONNECT_RETRY_DELAY_SECONDS = 5
 REQUIRED_DB_ENV = ("DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME")
 REQUEST_HEADERS = {"User-Agent": "SECURECODE-SPACE-NewsCrawler/1.0"}
 BOANNEWS_REQUEST_HEADERS = {**REQUEST_HEADERS, "Cache-Control": "no-cache"}
@@ -37,18 +40,31 @@ def validate_environment():
 
 def get_db_connection():
     validate_environment()
-    return pymysql.connect(
-        host=os.environ["DB_HOST"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-        database=os.environ["DB_NAME"],
-        port=int(os.getenv("DB_PORT") or 3306),
-        connect_timeout=10,
-        read_timeout=30,
-        write_timeout=30,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    for attempt in range(1, DB_CONNECT_ATTEMPTS + 1):
+        try:
+            return pymysql.connect(
+                host=os.environ["DB_HOST"],
+                user=os.environ["DB_USER"],
+                password=os.environ["DB_PASSWORD"],
+                database=os.environ["DB_NAME"],
+                port=int(os.getenv("DB_PORT") or 3306),
+                connect_timeout=10,
+                read_timeout=30,
+                write_timeout=30,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+            )
+        except pymysql.err.OperationalError:
+            if attempt >= DB_CONNECT_ATTEMPTS:
+                raise
+            delay = DB_CONNECT_RETRY_DELAY_SECONDS * attempt
+            print(
+                f"::warning title=뉴스 DB 연결 재시도::"
+                f"{delay}초 후 다시 연결합니다. ({attempt}/{DB_CONNECT_ATTEMPTS})"
+            )
+            time.sleep(delay)
+
+    raise RuntimeError("뉴스 DB 연결 재시도 횟수를 초과했습니다.")
 
 
 def fetch_feed(url):

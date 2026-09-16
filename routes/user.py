@@ -1,7 +1,7 @@
 import re
 from datetime import timedelta, timezone
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, unset_jwt_cookies
 from sqlalchemy import case
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,6 +14,7 @@ from models import (
     User,
     UserNewsBookmark,
 )
+from session_security import invalidate_user_sessions
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/user')
 KOREA_TIMEZONE = timezone(timedelta(hours=9), name='KST')
@@ -327,9 +328,12 @@ def change_password():
         
     # 4차: 통과 시 해싱하여 DB 저장
     user.password = generate_password_hash(new_password)
+    invalidate_user_sessions(user)
     db.session.commit()
-    
-    return jsonify({"status": "success", "message": "비밀번호가 성공적으로 변경되었습니다. 2초 뒤 자동 로그아웃됩니다."}), 200
+
+    response = jsonify({"status": "success", "message": "비밀번호가 변경되었습니다. 새 비밀번호로 다시 로그인해 주세요."})
+    unset_jwt_cookies(response)
+    return response, 200
 
 # [API] 현재 비밀번호 일치 여부 단순 검증 (회원정보수정 진입용 2차 인증)
 @user_bp.route('/verify-password', methods=['POST'])

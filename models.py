@@ -8,6 +8,7 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
     phone = db.Column(db.String(20), nullable=True)
     role = db.Column(db.String(20), nullable=True, default='USER')
+    session_version = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
 class PendingSignup(db.Model):
