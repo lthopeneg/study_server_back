@@ -186,7 +186,7 @@ def delete_daily_main_news(news_id):
 
 @news_bp.route('/<int:news_id>/generate-ai-article', methods=['POST'])
 @jwt_required()
-@limiter.limit('2 per hour')
+@limiter.limit('5 per hour')
 def generate_ai_article_from_news(news_id):
     user = User.query.filter_by(login_id=get_jwt_identity()).first()
     if not user or user.role != 'ADMIN':
