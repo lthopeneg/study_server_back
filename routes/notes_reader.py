@@ -1,4 +1,4 @@
-"""Read-only access to weekly research notes for administrators."""
+"""Read-only access to selected research documents for administrators."""
 
 import os
 import re
@@ -18,10 +18,22 @@ DEFAULT_RESEARCH_ROOT = (
 )
 MAX_NOTE_BYTES = 1024 * 1024
 NOTE_NAME_PATTERN = re.compile(r"^\d+_[^/\\]+\.txt$", re.IGNORECASE)
+RESEARCH_RESOURCES = {
+    "summary": "Reports/executive_summary.md",
+    "report": "Reports/final_research_progress_report.md",
+    "index": "Reports/weekly_artifact_index.md",
+    "metrics": "Reports/cumulative_evaluation_summary.json",
+    "scorecard": "Evaluation/reviewer_scorecard.md",
+    "architecture": "Reports/system_architecture_diagram.md",
+}
 
 
 def _notes_directory():
     return Path(os.getenv("RESEARCH_NOTES_PATH", str(DEFAULT_RESEARCH_ROOT))) / "Notes"
+
+
+def _research_root():
+    return Path(os.getenv("RESEARCH_NOTES_PATH", str(DEFAULT_RESEARCH_ROOT)))
 
 
 def _admin_only():
@@ -84,3 +96,33 @@ def get_note_content():
     if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
         return jsonify({"msg": "연구 노트의 크기 제한을 초과했습니다."}), 413
     return jsonify({"name": name, "content": content})
+
+
+@notes_reader_bp.get("/api/notes/resources/<resource_id>")
+@jwt_required()
+def get_research_resource(resource_id):
+    if not _admin_only():
+        return jsonify({"msg": "접근 권한이 없습니다."}), 403
+
+    relative_path = RESEARCH_RESOURCES.get(resource_id)
+    if relative_path is None:
+        return jsonify({"msg": "연구 자료를 찾을 수 없습니다."}), 404
+
+    root = _research_root()
+    candidate = root / relative_path
+    try:
+        root_resolved = root.resolve(strict=True)
+        if candidate.is_symlink() or not candidate.is_file():
+            raise FileNotFoundError
+        if not candidate.resolve(strict=True).is_relative_to(root_resolved):
+            raise FileNotFoundError
+        if candidate.stat().st_size > MAX_NOTE_BYTES:
+            return jsonify({"msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
+        with candidate.open("r", encoding="utf-8") as resource_file:
+            content = resource_file.read(MAX_NOTE_BYTES + 1)
+    except (OSError, UnicodeError):
+        return jsonify({"msg": "연구 자료를 찾거나 읽을 수 없습니다."}), 404
+
+    if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
+        return jsonify({"msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
+    return jsonify({"content": content})
