@@ -38,7 +38,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
 
   deploy:
@@ -52,12 +54,16 @@ jobs:
           host: ${{ secrets.SS_HOST }}
           username: ${{ secrets.SS_USERNAME }}
           key: ${{ secrets.SS_KEY }}
+          script_stop: true
           script: |
-            IMAGE_URL="ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]'):latest"
+            set -eu
+            IMAGE_URL="ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]'):${{ github.sha }}"
 
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            docker pull $IMAGE_URL
+            # 이미지 다운로드에 실패하면 기존 운영 컨테이너를 건드리지 않습니다.
+            docker pull "$IMAGE_URL"
+            docker image inspect "$IMAGE_URL" >/dev/null
 
             # Caddy가 컨테이너 이름으로 백엔드에 연결할 공용 네트워크를 보장합니다.
             docker network inspect study-network >/dev/null 2>&1 || docker network create study-network
@@ -101,4 +107,4 @@ jobs:
               -e MAIL_USERNAME=${{ secrets.MAIL_USERNAME }} \
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \
               -e BACKUP_ENCRYPTION_KEY=${{ secrets.BACKUP_ENCRYPTION_KEY }} \
-              --name study-back-app $IMAGE_URL
+              --name study-back-app "$IMAGE_URL"
