@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from services.news_llm import call_news_llm
 
@@ -16,10 +16,17 @@ def openai_response(text):
 
 
 class NewsLlmTests(unittest.TestCase):
+    def setUp(self):
+        self.gemini_context = patch('services.news_llm.genai.Client')
+        self.gemini_client = self.gemini_context.start()
+        self.addCleanup(self.gemini_context.stop)
+        self.gemini_client.return_value.__enter__.return_value = (
+            self.gemini_client.return_value
+        )
+
     @patch('services.news_llm.OpenAI')
-    @patch('services.news_llm.genai.Client')
-    def test_uses_gemini_first(self, gemini_client, openai_client):
-        gemini_client.return_value.models.generate_content.return_value = (
+    def test_uses_gemini_first(self, openai_client):
+        self.gemini_client.return_value.models.generate_content.return_value = (
             gemini_response(' Gemini 결과 ')
         )
 
@@ -28,13 +35,11 @@ class NewsLlmTests(unittest.TestCase):
 
         self.assertEqual(result, 'Gemini 결과')
         openai_client.assert_not_called()
+        self.gemini_client.return_value.__exit__.assert_called_once()
 
     @patch('services.news_llm.OpenAI')
-    @patch('services.news_llm.genai.Client')
-    def test_falls_back_to_openai_and_preserves_json_mode(
-        self, gemini_client, openai_client
-    ):
-        gemini_client.return_value.models.generate_content.side_effect = RuntimeError(
+    def test_falls_back_to_openai_and_preserves_json_mode(self, openai_client):
+        self.gemini_client.return_value.models.generate_content.side_effect = RuntimeError(
             'unavailable'
         )
         openai_client.return_value.chat.completions.create.return_value = (
@@ -50,19 +55,17 @@ class NewsLlmTests(unittest.TestCase):
 
         self.assertEqual(result, '{"selected": true}')
         gemini_config = (
-            gemini_client.return_value.models.generate_content.call_args.kwargs['config']
+            self.gemini_client.return_value.models.generate_content.call_args.kwargs['config']
         )
         self.assertEqual(gemini_config.response_mime_type, 'application/json')
         openai_call = openai_client.return_value.chat.completions.create.call_args
         self.assertEqual(
             openai_call.kwargs['response_format'], {'type': 'json_object'}
         )
+        self.gemini_client.return_value.__exit__.assert_called_once()
 
     @patch('services.news_llm.OpenAI')
-    @patch('services.news_llm.genai.Client')
-    def test_uses_openai_when_only_openai_key_exists(
-        self, gemini_client, openai_client
-    ):
+    def test_uses_openai_when_only_openai_key_exists(self, openai_client):
         openai_client.return_value.chat.completions.create.return_value = (
             openai_response('OpenAI 결과')
         )
@@ -71,7 +74,7 @@ class NewsLlmTests(unittest.TestCase):
             result = call_news_llm('prompt')
 
         self.assertEqual(result, 'OpenAI 결과')
-        gemini_client.assert_not_called()
+        self.gemini_client.assert_not_called()
 
     def test_rejects_missing_api_keys(self):
         with patch.dict('os.environ', {}, clear=True):
@@ -79,11 +82,8 @@ class NewsLlmTests(unittest.TestCase):
                 call_news_llm('prompt')
 
     @patch('services.news_llm.OpenAI')
-    @patch('services.news_llm.genai.Client')
-    def test_reports_failure_when_both_providers_fail(
-        self, gemini_client, openai_client
-    ):
-        gemini_client.return_value.models.generate_content.side_effect = RuntimeError(
+    def test_reports_failure_when_both_providers_fail(self, openai_client):
+        self.gemini_client.return_value.models.generate_content.side_effect = RuntimeError(
             'gemini failure'
         )
         openai_client.return_value.chat.completions.create.side_effect = RuntimeError(
@@ -97,4 +97,3 @@ class NewsLlmTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, 'AI 뉴스 생성에 실패'):
                 call_news_llm('prompt')
-

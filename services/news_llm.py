@@ -34,10 +34,11 @@ def call_news_llm(prompt, *, is_json=False, log=None):
             }
             if config is not None:
                 request_options['config'] = config
-            response = genai.Client(
+            with genai.Client(
                 api_key=gemini_key,
                 http_options={'timeout': AI_REQUEST_TIMEOUT_SECONDS * 1_000},
-            ).models.generate_content(**request_options)
+            ) as client:
+                response = client.models.generate_content(**request_options)
             if response.text and response.text.strip():
                 return response.text.strip()
             raise RuntimeError('Gemini가 빈 응답을 반환했습니다.')
