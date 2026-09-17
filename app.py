@@ -11,6 +11,7 @@ from routes.news import news_bp
 from routes.user import user_bp
 from routes.practice import practice_bp
 from routes.audit import audit_bp, security_alert_bp
+from routes.notes_reader import notes_reader_bp
 
 # 테이블 생성을 위해 모델 임포트 (app_context보다 위에서 호출 필수)
 import models 
@@ -93,6 +94,7 @@ app.register_blueprint(user_bp)
 app.register_blueprint(practice_bp)
 app.register_blueprint(audit_bp)
 app.register_blueprint(security_alert_bp)
+app.register_blueprint(notes_reader_bp)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
