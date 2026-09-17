@@ -64,7 +64,7 @@ def list_notes():
 
     notes_dir = _notes_directory()
     if not notes_dir.is_dir():
-        return jsonify({"notes": []})
+        return jsonify({"code": "NOTES_DIRECTORY_UNAVAILABLE", "msg": "연구 노트 폴더를 사용할 수 없습니다."}), 503
 
     notes = []
     for candidate in notes_dir.iterdir():
@@ -85,16 +85,16 @@ def get_note_content():
     name = request.args.get("name", "")
     note_path = _safe_note_path(_notes_directory(), name)
     if note_path is None:
-        return jsonify({"msg": "연구 노트를 찾을 수 없습니다."}), 404
+        return jsonify({"code": "NOTE_NOT_FOUND", "msg": "연구 노트를 찾을 수 없습니다."}), 404
 
     try:
         with note_path.open("r", encoding="utf-8") as note_file:
             content = note_file.read(MAX_NOTE_BYTES + 1)
     except (OSError, UnicodeError):
-        return jsonify({"msg": "연구 노트를 읽을 수 없습니다."}), 500
+        return jsonify({"code": "NOTE_UNREADABLE", "msg": "연구 노트를 읽을 수 없습니다."}), 500
 
     if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
-        return jsonify({"msg": "연구 노트의 크기 제한을 초과했습니다."}), 413
+        return jsonify({"code": "NOTE_TOO_LARGE", "msg": "연구 노트의 크기 제한을 초과했습니다."}), 413
     return jsonify({"name": name, "content": content})
 
 
@@ -106,7 +106,7 @@ def get_research_resource(resource_id):
 
     relative_path = RESEARCH_RESOURCES.get(resource_id)
     if relative_path is None:
-        return jsonify({"msg": "연구 자료를 찾을 수 없습니다."}), 404
+        return jsonify({"code": "RESOURCE_NOT_FOUND", "msg": "연구 자료를 찾을 수 없습니다."}), 404
 
     root = _research_root()
     candidate = root / relative_path
@@ -117,12 +117,14 @@ def get_research_resource(resource_id):
         if not candidate.resolve(strict=True).is_relative_to(root_resolved):
             raise FileNotFoundError
         if candidate.stat().st_size > MAX_NOTE_BYTES:
-            return jsonify({"msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
+            return jsonify({"code": "RESOURCE_TOO_LARGE", "msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
         with candidate.open("r", encoding="utf-8") as resource_file:
             content = resource_file.read(MAX_NOTE_BYTES + 1)
+    except FileNotFoundError:
+        return jsonify({"code": "RESOURCE_FILE_MISSING", "msg": "연구 자료 파일을 찾을 수 없습니다."}), 404
     except (OSError, UnicodeError):
-        return jsonify({"msg": "연구 자료를 찾거나 읽을 수 없습니다."}), 404
+        return jsonify({"code": "RESOURCE_UNREADABLE", "msg": "연구 자료를 읽을 수 없습니다."}), 500
 
     if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
-        return jsonify({"msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
+        return jsonify({"code": "RESOURCE_TOO_LARGE", "msg": "연구 자료의 크기 제한을 초과했습니다."}), 413
     return jsonify({"content": content})

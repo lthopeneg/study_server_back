@@ -69,10 +69,17 @@ class NotesReaderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/notes", headers=self.headers("user")).status_code, 403)
         self.assertEqual(self.client.get("/api/notes/content", query_string={"name": "01_첫 주차.txt"}, headers=self.headers("user")).status_code, 403)
 
+    def test_missing_notes_directory_is_an_error(self):
+        with patch.dict("os.environ", {"RESEARCH_NOTES_PATH": str(self.root / "missing")}):
+            response = self.client.get("/api/notes", headers=self.headers("admin"))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["code"], "NOTES_DIRECTORY_UNAVAILABLE")
+
     def test_rejects_path_escape_and_oversized_note(self):
         for name in ("../outside.txt", "secret.md", "Notes/01_첫 주차.txt"):
             response = self.client.get("/api/notes/content", query_string={"name": name}, headers=self.headers("admin"))
             self.assertEqual(response.status_code, 404)
+            self.assertEqual(response.json["code"], "NOTE_NOT_FOUND")
 
         (self.root / "Notes" / "03_큰 노트.txt").write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
         response = self.client.get("/api/notes", headers=self.headers("admin"))
@@ -87,11 +94,16 @@ class NotesReaderTests(unittest.TestCase):
         self.assertEqual(response.json["content"], "# 연구 요약")
         self.assertEqual(self.client.get("/api/notes/resources/../../outside.txt", headers=self.headers("admin")).status_code, 404)
         self.assertEqual(self.client.get("/api/notes/resources/unknown", headers=self.headers("admin")).status_code, 404)
+        missing = self.client.get("/api/notes/resources/report", headers=self.headers("admin"))
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json["code"], "RESOURCE_FILE_MISSING")
 
     def test_rejects_oversized_and_symlinked_resource(self):
         summary = self.root / "Reports" / "executive_summary.md"
         summary.write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
-        self.assertEqual(self.client.get("/api/notes/resources/summary", headers=self.headers("admin")).status_code, 413)
+        oversized = self.client.get("/api/notes/resources/summary", headers=self.headers("admin"))
+        self.assertEqual(oversized.status_code, 413)
+        self.assertEqual(oversized.json["code"], "RESOURCE_TOO_LARGE")
         summary.unlink()
         try:
             summary.symlink_to(self.root / "outside.txt")
