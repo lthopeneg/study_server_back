@@ -1,8 +1,9 @@
 name: Security Checks
 
 on:
-  pull_request:
-    branches: [main]
+  # 개발 중 PR마다 반복 실행하지 않음. 개발 완료 후 아래 트리거를 다시 활성화.
+  # pull_request:
+  #   branches: [main]
   schedule:
     - cron: "47 18 * * 1"
   workflow_dispatch:
