@@ -97,6 +97,7 @@ jobs:
               -e DB_NAME=${{ secrets.DB_NAME }} \
               -e JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }} \
               -e APP_ENV=production \
+              -e APP_REVISION=${{ github.sha }} \
               -e JWT_COOKIE_SECURE=true \
               -e JWT_COOKIE_CSRF_PROTECT=true \
               -e CORS_ORIGINS=https://scspace.duckdns.org \
@@ -108,3 +109,27 @@ jobs:
               -e MAIL_PASSWORD=${{ secrets.MAIL_PASSWORD }} \
               -e BACKUP_ENCRYPTION_KEY=${{ secrets.BACKUP_ENCRYPTION_KEY }} \
               --name study-back-app "$IMAGE_URL"
+
+            # 실행 중인 컨테이너가 이번에 받은 이미지인지 확인합니다.
+            EXPECTED_IMAGE_ID="$(docker image inspect "$IMAGE_URL" --format '{{.Id}}')"
+            RUNNING_IMAGE_ID="$(docker inspect study-back-app --format '{{.Image}}')"
+            test "$RUNNING_IMAGE_ID" = "$EXPECTED_IMAGE_ID"
+
+            # Caddy를 거친 실제 HTTP 응답과 실행 중인 앱의 커밋을 확인합니다.
+            ATTEMPT=0
+            VERIFIED=false
+            while [ "$ATTEMPT" -lt 12 ]; do
+              ATTEMPT=$((ATTEMPT + 1))
+              if RESPONSE="$(curl -fsS --max-time 5 https://scspace.duckdns.org/api/health 2>/dev/null)" \
+                && printf '%s' "$RESPONSE" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' \
+                && printf '%s' "$RESPONSE" | grep -Eq '"revision"[[:space:]]*:[[:space:]]*"${{ github.sha }}"'; then
+                VERIFIED=true
+                break
+              fi
+              sleep 3
+            done
+            test "$VERIFIED" = true
+
+            # 인증이 필요한 핵심 API는 익명 요청에 401을 반환해야 합니다.
+            test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 https://scspace.duckdns.org/api/check-auth)" = 401
+            test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 https://scspace.duckdns.org/api/notes/resources/summary)" = 401
