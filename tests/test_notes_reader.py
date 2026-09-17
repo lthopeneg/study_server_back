@@ -20,6 +20,8 @@ class NotesReaderTests(unittest.TestCase):
         (self.root / "Notes" / "02_둘째 주차.txt").write_text("# 둘째 주차", encoding="utf-8")
         (self.root / "Notes" / "secret.md").write_text("비공개", encoding="utf-8")
         (self.root / "outside.txt").write_text("비공개", encoding="utf-8")
+        (self.root / "Reports").mkdir()
+        (self.root / "Reports" / "executive_summary.md").write_text("# 연구 요약", encoding="utf-8")
 
         self.app = Flask(__name__)
         self.app.config.update(
@@ -75,6 +77,27 @@ class NotesReaderTests(unittest.TestCase):
         (self.root / "Notes" / "03_큰 노트.txt").write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
         response = self.client.get("/api/notes", headers=self.headers("admin"))
         self.assertNotIn("03_큰 노트.txt", [note["name"] for note in response.json["notes"]])
+
+    def test_resources_are_admin_only_and_allowlisted(self):
+        url = "/api/notes/resources/summary"
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.assertEqual(self.client.get(url, headers=self.headers("user")).status_code, 403)
+        response = self.client.get(url, headers=self.headers("admin"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["content"], "# 연구 요약")
+        self.assertEqual(self.client.get("/api/notes/resources/../../outside.txt", headers=self.headers("admin")).status_code, 404)
+        self.assertEqual(self.client.get("/api/notes/resources/unknown", headers=self.headers("admin")).status_code, 404)
+
+    def test_rejects_oversized_and_symlinked_resource(self):
+        summary = self.root / "Reports" / "executive_summary.md"
+        summary.write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
+        self.assertEqual(self.client.get("/api/notes/resources/summary", headers=self.headers("admin")).status_code, 413)
+        summary.unlink()
+        try:
+            summary.symlink_to(self.root / "outside.txt")
+        except OSError:
+            self.skipTest("symlinks are unavailable")
+        self.assertEqual(self.client.get("/api/notes/resources/summary", headers=self.headers("admin")).status_code, 404)
 
 
 if __name__ == "__main__":
