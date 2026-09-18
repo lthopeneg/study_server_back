@@ -1,12 +1,12 @@
 import email.utils
 from datetime import datetime
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, g
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import case, func
 from extensions import db
 from models import SecurityNews, DailyMainNews, User, UserNewsBookmark
 from news_persistence import save_daily_main_news
-from services.news_ai import write_news_article
+from services.news_ai import NewsSourceValidationError, write_news_article
 from extensions import limiter
 from audit import record_audit_event
 
@@ -226,11 +226,17 @@ def generate_ai_article_from_news(news_id):
             'message': 'AI 기사를 작성했습니다.',
             'data': {'id': article.id},
         }), 201
-    except ValueError as error:
+    except NewsSourceValidationError as error:
         return jsonify({'status': 'error', 'message': str(error)}), 422
+    except ValueError as error:
+        current_app.logger.error('Unexpected news source validation failure type=%s request_id=%s',
+                                 type(error).__name__, getattr(g, 'request_id', '-'))
+        return jsonify({'status': 'error', 'message': '기사 원문을 처리하지 못했습니다.'}), 422
     except RuntimeError as error:
-        current_app.logger.warning('Manual AI news generation failed: %s', error)
-        return jsonify({'status': 'error', 'message': str(error)}), 502
-    except Exception:
-        current_app.logger.exception('Manual AI news generation failed')
+        current_app.logger.error('Manual AI news generation failed type=%s request_id=%s',
+                                 type(error).__name__, getattr(g, 'request_id', '-'))
+        return jsonify({'status': 'error', 'message': 'AI 기사 작성 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'}), 502
+    except Exception as error:
+        current_app.logger.error('Manual AI news generation failed type=%s request_id=%s',
+                                 type(error).__name__, getattr(g, 'request_id', '-'))
         return jsonify({'status': 'error', 'message': 'AI 기사 작성 중 오류가 발생했습니다.'}), 500

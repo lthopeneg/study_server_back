@@ -8,7 +8,7 @@ from flask_jwt_extended import create_access_token
 from extensions import db, jwt, limiter
 from models import DailyMainNews, SecurityNews, User, UserNewsBookmark
 from routes.news import get_ai_article_ids_by_url, news_bp
-from services.news_ai import validate_public_news_url
+from services.news_ai import NewsSourceValidationError, validate_public_news_url
 
 
 class ManualNewsGenerationApiTestCase(unittest.TestCase):
@@ -68,6 +68,24 @@ class ManualNewsGenerationApiTestCase(unittest.TestCase):
             response = self.client.post('/api/news/10/generate-ai-article', headers=self.headers('admin'))
         self.assertEqual(response.status_code, 409)
         write_article.assert_not_called()
+
+    @patch('routes.news.write_news_article', side_effect=NewsSourceValidationError('HTML 형식의 기사 원문만 가져올 수 있습니다.'))
+    def test_expected_source_validation_keeps_safe_guidance(self, _write_article):
+        response = self.client.post('/api/news/10/generate-ai-article', headers=self.headers('admin'))
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json['message'], 'HTML 형식의 기사 원문만 가져올 수 있습니다.')
+
+    @patch('routes.news.write_news_article', side_effect=ValueError('private-path=/etc/service/config'))
+    def test_unexpected_validation_does_not_expose_exception(self, _write_article):
+        response = self.client.post('/api/news/10/generate-ai-article', headers=self.headers('admin'))
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('private-path', response.json['message'])
+
+    @patch('routes.news.write_news_article', side_effect=RuntimeError('upstream key=secret-value'))
+    def test_upstream_failure_does_not_expose_exception(self, _write_article):
+        response = self.client.post('/api/news/10/generate-ai-article', headers=self.headers('admin'))
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn('secret-value', response.json['message'])
 
     def test_maps_news_to_existing_ai_article(self):
         db.session.add_all([
