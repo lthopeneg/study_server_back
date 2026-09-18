@@ -1,5 +1,5 @@
 import os
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import User
 
@@ -106,8 +106,9 @@ def get_file_content():
         with open(full_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return jsonify({"status": "success", "content": content})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception:
+        current_app.logger.exception('Legacy research file read failed')
+        return jsonify({"status": "error", "message": "파일을 읽지 못했습니다."}), 500
 
 @notes_bp.route('/api/notes/experiment_files', methods=['GET'])
 @jwt_required()

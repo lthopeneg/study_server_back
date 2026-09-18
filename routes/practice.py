@@ -59,6 +59,10 @@ MAX_SUBMITTED_ANSWERS = 500
 MAX_BULK_DELETE_PROBLEMS = 100
 
 
+class StoredProblemError(ValueError):
+    """A published problem has invalid server-side data."""
+
+
 def validate_csharp_environment(language, runtime_platform, project_type, request_text='', allow_auto=False):
     if language != 'C#':
         return None
@@ -433,8 +437,8 @@ def validate_problem_set_payload(data):
     if language == 'C#':
         try:
             detected_project_type = detect_csharp_web_project_type(validated_variants)
-        except ValueError as error:
-            return None, str(error)
+        except ValueError:
+            return None, 'C# 문제의 웹 프로젝트 구조가 올바르지 않습니다.'
         if project_type not in {None, 'auto'} and project_type != detected_project_type:
             return None, '저장된 프로젝트 유형과 실제 C# 코드 구조가 일치하지 않습니다.'
         project_type = detected_project_type
@@ -590,7 +594,7 @@ def grade_problem_submission(problem_set, raw_variants):
     submitted_map = _submission_variant_map(raw_variants)
     stored_map = {variant.problem_type: variant for variant in problem_set.variants}
     if set(stored_map) != REQUIRED_TYPES:
-        raise ValueError('저장된 문제 유형 구성이 올바르지 않습니다.')
+        raise StoredProblemError('저장된 문제 유형 구성이 올바르지 않습니다.')
 
     results = []
     for problem_type in ('line_selection', 'secure_blank'):
@@ -598,7 +602,7 @@ def grade_problem_submission(problem_set, raw_variants):
         try:
             expected_answers = json.loads(stored_variant.answers_json)
         except (TypeError, json.JSONDecodeError) as error:
-            raise ValueError('저장된 정답 형식이 올바르지 않습니다.') from error
+            raise StoredProblemError('저장된 정답 형식이 올바르지 않습니다.') from error
         submitted_answers = submitted_map[problem_type].get('answers')
         if not isinstance(submitted_answers, list) or len(submitted_answers) > MAX_SUBMITTED_ANSWERS:
             raise ValueError('제출한 정답 형식이 올바르지 않습니다.')
@@ -1512,14 +1516,15 @@ def generate_problem_set():
     except GenerationCancelled:
         return jsonify({'status': 'cancelled', 'message': 'AI 문제 생성을 취소했습니다.'}), 409
     except ValueError as error:
-        current_app.logger.warning('Invalid AI practice problem response: %s', error)
+        current_app.logger.warning('Invalid AI practice problem response type=%s', type(error).__name__)
         recoverable_draft = build_recoverable_generation_draft(generated)
+        public_error = 'AI 생성 결과가 품질 검증을 통과하지 못했습니다. 초안을 확인한 뒤 다시 시도해주세요.'
         return jsonify({
             'status': 'error',
-            'message': f'AI 생성 결과 검증에 실패했습니다: {error}',
+            'message': public_error,
             'data': {
                 'draft': recoverable_draft,
-                'validation_error': str(error),
+                'validation_error': public_error,
                 'repair_attempted': repair_attempted,
                 'can_retry_repair': recoverable_draft is not None,
             },
@@ -1590,6 +1595,9 @@ def submit_published_problem_set(problem_set_id):
     data = request.get_json(silent=True) or {}
     try:
         result = grade_problem_submission(problem_set, data.get('variants'))
+    except StoredProblemError:
+        current_app.logger.exception('Published practice problem has invalid stored answers')
+        return jsonify({'status': 'error', 'message': '문제 데이터에 오류가 있어 채점할 수 없습니다.'}), 500
     except ValueError as error:
         return jsonify({'status': 'error', 'message': str(error)}), 400
     user = User.query.filter_by(login_id=get_jwt_identity()).first()
@@ -1701,8 +1709,8 @@ def delete_problem_sets_batch():
         return jsonify({'status': 'error', 'message': '접근 권한이 없습니다.'}), 403
     try:
         problem_ids = validate_delete_problem_ids((request.get_json(silent=True) or {}).get('problem_ids'))
-    except ValueError as error:
-        return jsonify({'status': 'error', 'message': str(error)}), 400
+    except ValueError:
+        return jsonify({'status': 'error', 'message': '삭제할 문제 번호가 올바르지 않습니다.'}), 400
 
     problem_sets = PracticeProblemSet.query.filter(PracticeProblemSet.id.in_(problem_ids)).all()
     found_ids = {problem_set.id for problem_set in problem_sets}

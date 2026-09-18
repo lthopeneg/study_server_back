@@ -16,6 +16,7 @@ from routes.practice import (
     build_variant_consistency_check,
     build_generated_blank_hint,
     grade_problem_submission,
+    StoredProblemError,
     normalize_generated_blank_answers,
     normalize_generated_line_answers,
     resolve_generated_project_type,
@@ -913,6 +914,15 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertTrue(result['correct'])
         self.assertTrue(all(item['correct'] for item in result['variants']))
+
+    def test_invalid_stored_answers_are_not_client_input_errors(self):
+        problem = self.make_published_problem()
+        problem.variants[0].answers_json = 'not-json'
+        with self.assertRaises(StoredProblemError):
+            grade_problem_submission(problem, [
+                {'problem_type': 'line_selection', 'answers': []},
+                {'problem_type': 'secure_blank', 'answers': []},
+            ])
 
     def test_marks_wrong_answers_without_revealing_correct_answer(self):
         result = grade_problem_submission(self.make_published_problem(), [
