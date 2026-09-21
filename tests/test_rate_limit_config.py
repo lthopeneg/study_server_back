@@ -1,9 +1,15 @@
 import unittest
+from unittest.mock import patch
 
 from flask import Flask
 from flask_limiter import Limiter
 
-from rate_limit_config import install_rate_limit_error_handler, login_account_key, signup_email_key
+from rate_limit_config import (
+    install_rate_limit_error_handler,
+    login_account_key,
+    practice_generation_account_key,
+    signup_email_key,
+)
 
 
 class RateLimitKeyTestCase(unittest.TestCase):
@@ -30,6 +36,13 @@ class RateLimitKeyTestCase(unittest.TestCase):
             second = login_account_key()
         self.assertEqual(first, second)
 
+    @patch('rate_limit_config.get_jwt_identity', return_value=' Admin ')
+    def test_practice_generation_key_does_not_expose_account(self, _identity):
+        with self.app.test_request_context():
+            key = practice_generation_account_key()
+        self.assertTrue(key.startswith('practice-generation:'))
+        self.assertNotIn('admin', key)
+
     def test_rate_limit_returns_consistent_json(self):
         limiter = Limiter(key_func=lambda: 'client', storage_uri='memory://')
         limiter.init_app(self.app)
@@ -45,6 +58,7 @@ class RateLimitKeyTestCase(unittest.TestCase):
         rejected = client.get('/limited')
         self.assertEqual(rejected.status_code, 429)
         self.assertEqual(rejected.get_json()['status'], 'error')
+        self.assertEqual(rejected.get_json()['code'], 'RATE_LIMITED')
         self.assertIn('잠시 후', rejected.get_json()['message'])
 
 
