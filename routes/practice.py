@@ -32,6 +32,7 @@ from services.generation_cancel import (
     register_generation,
     unregister_generation,
 )
+from rate_limit_config import practice_generation_account_key
 
 
 practice_bp = Blueprint('practice', __name__, url_prefix='/api/practice')
@@ -1354,7 +1355,7 @@ def generate_problem_scenario():
 
 @practice_bp.route('/problems/generate', methods=['POST'])
 @jwt_required()
-@limiter.limit('5 per hour')
+@limiter.limit('10 per hour', key_func=practice_generation_account_key)
 def generate_problem_set():
     admin = get_admin_user(get_jwt_identity())
     if not admin:
