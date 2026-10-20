@@ -15,6 +15,7 @@ from routes.practice import (
     build_recoverable_generation_draft,
     build_variant_consistency_check,
     build_generated_blank_hint,
+    count_generated_problem_files,
     grade_problem_submission,
     StoredProblemError,
     normalize_generated_blank_answers,
@@ -506,6 +507,54 @@ class PracticeValidationTests(unittest.TestCase):
 
         self.assertEqual([item['problem_type'] for item in variants], ['line_selection', 'secure_blank'])
         self.assertEqual(len(variants[0]['files']), 2)
+
+    def test_excludes_language_support_files_from_generated_file_limit(self):
+        python_files = [
+            {'filename': f'module_{index}.py'} for index in range(5)
+        ] + [{'filename': 'requirements.txt'}]
+        csharp_files = [
+            {'filename': f'Class{index}.cs'} for index in range(5)
+        ] + [
+            {'filename': 'packages.config'},
+            {'filename': 'PracticeProblem.csproj'},
+            {'filename': 'Web.config'},
+        ]
+
+        self.assertEqual(count_generated_problem_files(python_files, 'Python'), 5)
+        self.assertEqual(count_generated_problem_files(csharp_files, 'C#'), 5)
+
+    def test_rejects_generated_variant_above_maximum_problem_files(self):
+        extra_files = [
+            {'filename': f'module_{index}.py', 'content': 'helper = 1'}
+            for index in range(1, 6)
+        ]
+        generated = {
+            'variants': [
+                {
+                    'problem_type': 'line_selection',
+                    'hint': make_structured_hint(source=1, validation_failure=1, sink=1),
+                    'files': [
+                        {'filename': 'app.py', 'content': 'value = input()\nquery = "SELECT " + value\nexecute(query)'},
+                        *extra_files,
+                        {'filename': 'requirements.txt', 'content': 'Flask==3.1.3'},
+                    ],
+                    'answers': [
+                        {'filename': 'app.py', 'line': 1, 'code': 'value = input()', 'role': 'source'},
+                        {'filename': 'app.py', 'line': 2, 'code': 'query = "SELECT " + value', 'role': 'validation_failure'},
+                        {'filename': 'app.py', 'line': 3, 'code': 'execute(query)', 'role': 'sink'},
+                    ],
+                },
+                {
+                    'problem_type': 'secure_blank',
+                    'hint': '힌트',
+                    'files': [{'filename': 'app.py', 'content': 'value = ____'}],
+                    'answers': [{'filename': 'app.py', 'line': 1, 'answer': 'input'}],
+                },
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, '최대 파일 수 5개'):
+            validate_generated_variants(generated, 1)
 
     def test_rejects_generated_variant_below_minimum_files(self):
         generated = {

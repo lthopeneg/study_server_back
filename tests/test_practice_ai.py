@@ -203,6 +203,8 @@ class PracticeAiTests(unittest.TestCase):
         self.assertIn('가장 핵심적인 함수·메서드·조건 요소', request['input'])
         self.assertIn('점, 공백, 따옴표, 괄호 또는 연산자', request['input'])
         self.assertIn('고정 문자열이 필요하면 별도의 이름 있는 상수', request['input'])
+        self.assertIn('문제 파일은 최대 5개', request['input'])
+        self.assertIn('requirements.txt', request['input'])
 
     @patch('services.practice_ai.collect_research_context', return_value='연구노트 내용')
     @patch('services.practice_ai.OpenAI')
