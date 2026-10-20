@@ -167,6 +167,7 @@ def _build_prompt(*, language, runtime_platform, project_type, major_topic, mino
 - 소주제: {minor_topic}
 - 난이도: {difficulty}
 - 각 문제 유형은 최소 {minimum_files}개의 {extension} 파일로 구성합니다.
+- 각 문제 유형의 문제 파일은 최대 5개만 생성합니다. Python의 requirements.txt와 C#의 packages.config, PracticeProblem.csproj, Web.config는 이 개수에서 제외합니다.
 - 관리자 시나리오: {scenario or '지정 없음'}
 - 추가 요청: {extra_request or '없음'}
 {security_specific_rules}
@@ -388,12 +389,14 @@ def repair_problem_draft(generated, validation_error, cancel_event=None, **condi
 - 소주제: {conditions['minor_topic']}
 - 난이도: {conditions['difficulty']}
 - 유형별 최소 소스 파일 수: {conditions['minimum_files']}
+- 유형별 최대 문제 파일 수: 5개 (Python requirements.txt 및 C# 프로젝트 지원 파일 제외)
 - 2유형 목표 빈칸 수: {conditions['target_blank_count']}
 
 [검사 실패 원인]
 {validation_error}
 
 [수정 규칙]
+- 지원 파일을 제외한 문제 파일이 5개를 초과하면 역할이 겹치는 파일을 합쳐 5개 이하로 줄입니다.
 - 실패 원인을 해결하는 데 필요한 부분만 수정하되 두 문제 유형의 시나리오, 파일명, 변수명과 흐름은 최대한 유지합니다.
 - line_selection의 Source, Validation Failure, Sink 정답과 힌트 개수를 수정된 코드에 맞춰 다시 계산합니다.
 - line_selection에서 Sink까지 도달하지 않는 요청 필드, 단순 형 변환·인코딩·변수 대입은 정답에서 제거합니다. 실제 취약 데이터 흐름에 필요한 라인만 유지합니다.

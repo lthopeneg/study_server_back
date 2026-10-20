@@ -48,7 +48,7 @@ LINE_ANSWER_ROLES = {'source', 'validation_failure', 'sink'}
 ALLOWED_AI_MODELS = {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'}
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$')
 BLANK_PATTERN = re.compile(r'_{4,}')
-MAX_SOURCE_FILES_PER_VARIANT = 20
+MAX_SOURCE_FILES_PER_VARIANT = 5
 MAX_TARGET_BLANK_COUNT = 20
 MAX_FILES_PER_VARIANT = 24
 MAX_CODE_LENGTH = 100_000
@@ -58,6 +58,15 @@ MAX_SCENARIO_LENGTH = 5_000
 MAX_EXTRA_REQUEST_LENGTH = 5_000
 MAX_SUBMITTED_ANSWERS = 500
 MAX_BULK_DELETE_PROBLEMS = 100
+GENERATED_SUPPORT_FILES = {
+    'Python': {'requirements.txt'},
+    'C#': {'packages.config', 'practiceproblem.csproj', 'web.config'},
+}
+
+
+def count_generated_problem_files(files, language):
+    support_files = GENERATED_SUPPORT_FILES.get(language, set())
+    return sum(1 for item in files if item['filename'].lower() not in support_files)
 
 
 class StoredProblemError(ValueError):
@@ -973,6 +982,12 @@ def validate_generated_variants(generated, minimum_files, language='Python', min
         )
         if source_file_count < minimum_files:
             raise ValueError(f'AI가 {problem_type} 유형의 최소 파일 수를 충족하지 않았습니다.')
+        problem_file_count = count_generated_problem_files(variant['files'], language)
+        if problem_file_count > MAX_SOURCE_FILES_PER_VARIANT:
+            raise ValueError(
+                f'AI가 {problem_type} 유형의 최대 파일 수 '
+                f'{MAX_SOURCE_FILES_PER_VARIANT}개를 초과했습니다.'
+            )
         if language == 'C#' and not any(
             item['filename'].lower().endswith('.csproj') for item in variant['files']
         ):
