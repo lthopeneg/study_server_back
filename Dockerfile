@@ -1,5 +1,5 @@
 # 가볍고 안정적인 파이썬 3.11 슬림 버전 사용
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 
